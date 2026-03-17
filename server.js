@@ -17,6 +17,15 @@ app.get("/health", (req, res) => {
   });
 });
 
+app.get("/check", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    action: "check",
+    message: "Ruta /check funcionando",
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
