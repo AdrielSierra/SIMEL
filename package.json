@@ -7,8 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "check": "node simel-check.js",
-    "batch": "node simel-batch.js",
-    "postinstall": "npx playwright install chromium"
+    "batch": "node simel-batch.js"
   },
   "dependencies": {
     "csv-parse": "^6.1.0",
