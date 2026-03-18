@@ -1,9 +1,18 @@
-const fs = require('fs');
-const path = require('path');
-const { parse } = require('csv-parse/sync');
 const { chromium } = require('playwright');
 
 async function checkSimel(user, pass) {
+  if (!user || !pass) {
+    return {
+      ok: false,
+      usuario: user || '',
+      hayManifiesto: false,
+      filas: 0,
+      estado: 'ERROR',
+      detalle: 'Faltan credenciales user/pass',
+      error: 'Faltan credenciales user/pass',
+    };
+  }
+
   const browser = await chromium.launch({
     headless: true,
   });
@@ -81,89 +90,18 @@ async function checkSimel(user, pass) {
   }
 }
 
-async function main() {
-  const csvPath = path.resolve(__dirname, 'usuarios.csv');
+module.exports = { checkSimel };
 
-  if (!fs.existsSync(csvPath)) {
-    throw new Error('No existe usuarios.csv en la carpeta del proyecto');
-  }
+if (require.main === module) {
+  const user = process.env.SIMEL_USER;
+  const pass = process.env.SIMEL_PASS;
 
-  const csvText = fs.readFileSync(csvPath, 'utf8');
-  const records = parse(csvText, {
-    columns: true,
-    skip_empty_lines: true,
-    trim: true,
-  });
-
-  const resultados = [];
-  const conManifiesto = [];
-  const sinManifiesto = [];
-  const conError = [];
-
-  for (const row of records) {
-    const usuario = row.usuario;
-    const password = row.password;
-
-    console.log(`Revisando ${usuario}...`);
-    const resultado = await checkSimel(usuario, password);
-
-    resultados.push(resultado);
-
-    if (resultado.estado === 'CON_MANIFIESTO') {
-      conManifiesto.push({
-        usuario: resultado.usuario,
-        estado: resultado.estado,
-        detalle: resultado.detalle,
-      });
-    } else if (resultado.estado === 'SIN_MANIFIESTO') {
-      sinManifiesto.push({
-        usuario: resultado.usuario,
-        estado: resultado.estado,
-        detalle: resultado.detalle,
-      });
-    } else {
-      conError.push({
-        usuario: resultado.usuario,
-        estado: resultado.estado,
-        detalle: resultado.detalle,
-      });
-    }
-
-    console.log(`${usuario}: ${resultado.estado}`);
-  }
-
-  const salida = [
-    'usuario,ok,hayManifiesto,filas,estado,detalle,error',
-    ...resultados.map((r) => {
-      const detalle = String(r.detalle || '').replace(/"/g, '""');
-      const error = String(r.error || '').replace(/"/g, '""');
-      return `${r.usuario},${r.ok},${r.hayManifiesto},${r.filas},${r.estado},"${detalle}","${error}"`;
-    }),
-  ].join('\n');
-
-  const outPath = path.resolve(__dirname, 'resultados.csv');
-  fs.writeFileSync(outPath, salida, 'utf8');
-
-  console.log('\n========================================');
-  console.log('RESUMEN FINAL');
-  console.log('========================================');
-
-  console.log(`Con manifiesto: ${conManifiesto.length}`);
-  conManifiesto.forEach((x) => console.log(`- ${x.usuario}`));
-
-  console.log(`\nSin manifiesto: ${sinManifiesto.length}`);
-  sinManifiesto.forEach((x) => console.log(`- ${x.usuario}`));
-
-  console.log(`\nCon error: ${conError.length}`);
-  conError.forEach((x) => console.log(`- ${x.usuario} -> ${x.detalle}`));
-
-  console.log('========================================\n');
-
-  console.log('Terminado.');
-  console.log(`Resultados guardados en: ${outPath}`);
+  checkSimel(user, pass)
+    .then((resultado) => {
+      console.log(JSON.stringify(resultado, null, 2));
+    })
+    .catch((err) => {
+      console.error('Error general:', err);
+      process.exit(1);
+    });
 }
-
-main().catch((err) => {
-  console.error('Error general:', err);
-  process.exit(1);
-});
