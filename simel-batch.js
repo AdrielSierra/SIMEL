@@ -4,7 +4,7 @@ const { parse } = require('csv-parse/sync');
 const readline = require('readline/promises');
 const { stdin: input, stdout: output } = require('process');
 const { chromium } = require('playwright');
-
+module.exports = { procesarUsuario };
 const rl = readline.createInterface({ input, output });
 
 const URL_LOGIN = 'https://simel.ambiente.gob.ar/me/login/login_usuario.php';
@@ -733,10 +733,14 @@ async function main() {
   await rl.close();
 }
 
-main().catch(async (err) => {
-  console.error('Error general:', err);
-  try {
-    await rl.close();
-  } catch {}
-  process.exit(1);
-});
+module.exports = { procesarUsuario };
+
+if (require.main === module) {
+  main().catch(async (err) => {
+    console.error('Error general:', err);
+    try {
+      await rl.close();
+    } catch {}
+    process.exit(1);
+  });
+}
