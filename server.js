@@ -1,14 +1,7 @@
 const express = require("express");
 const { checkSimel } = require("./simel-check");
-const {
-  obtenerUsuariosSimelActivos,
-  actualizarResultadoSimel,
-  crearJobSimel,
-  buscarJobPendienteOEnProceso,
-  obtenerJobPorTexto
-} = require("./airtable");
 const { runBatch } = require("./simel-batch");
-const { iniciarWorker } = require("./worker");
+const { obtenerUsuariosSimelActivos } = require("./airtable");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -35,23 +28,12 @@ app.get("/check", async (req, res) => {
     if (!user || !pass) {
       return res.status(400).json({
         ok: false,
-        error: "Faltan credenciales"
+        error: "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
       });
     }
 
     const resultado = await checkSimel(user, pass);
-    return res.status(200).json({
-      ok: resultado.ok,
-      usuario: resultado.usuario,
-      estado: resultado.estado,
-      filas: resultado.filas,
-      mensaje:
-        resultado.estado === "CON_MANIFIESTO"
-          ? `Se encontraron ${resultado.filas} manifiesto(s) pendientes.`
-          : resultado.estado === "SIN_MANIFIESTO"
-          ? "No hay manifiestos pendientes."
-          : resultado.detalle
-    });
+    return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -72,11 +54,7 @@ app.post("/batch/run", async (req, res) => {
     }
 
     const usuarios = req.body.usuarios;
-
-    const resultado = await runBatch({
-      usuarios,
-      onResultado: actualizarResultadoSimel
-    });
+    const resultado = await runBatch({ usuarios });
 
     return res.status(200).json(resultado);
   } catch (error) {
@@ -90,7 +68,6 @@ app.post("/batch/run", async (req, res) => {
 app.get("/batch/url-run", async (req, res) => {
   try {
     const token = req.query.token;
-    const limit = Number(req.query.limit || 5);
 
     if (!process.env.BATCH_URL_TOKEN || token !== process.env.BATCH_URL_TOKEN) {
       return res.status(401).json({
@@ -99,21 +76,17 @@ app.get("/batch/url-run", async (req, res) => {
       });
     }
 
-    const usuarios = await obtenerUsuariosSimelActivos({ limit });
+    const usuarios = await obtenerUsuariosSimelActivos();
 
     if (!usuarios.length) {
       return res.status(200).json({
         ok: true,
         total: 0,
-        mensaje: "No hay usuarios activos para batch"
+        mensaje: "No hay usuarios activos en Airtable"
       });
     }
 
-    const resultado = await runBatch({
-      usuarios,
-      onResultado: actualizarResultadoSimel
-    });
-
+    const resultado = await runBatch({ usuarios });
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
@@ -122,84 +95,6 @@ app.get("/batch/url-run", async (req, res) => {
     });
   }
 });
-
-app.post("/jobs/simel/start", async (req, res) => {
-  try {
-    const secret = req.headers["x-batch-secret"];
-
-    if (!process.env.BATCH_SECRET || secret !== process.env.BATCH_SECRET) {
-      return res.status(401).json({
-        ok: false,
-        error: "No autorizado"
-      });
-    }
-
-    // Verificar si ya existe un job pendiente o en proceso
-    const jobExistente = await buscarJobPendienteOEnProceso();
-    if (jobExistente) {
-      return res.status(200).json({
-        ok: false,
-        mensaje: `Ya existe un job en curso (${jobExistente.estado})`,
-        jobId: jobExistente.jobId,
-        estado: jobExistente.estado,
-        procesadas: jobExistente.procesadas,
-        totalEmpresas: jobExistente.totalEmpresas
-      });
-    }
-
-    const usuarios = await obtenerUsuariosSimelActivos({ limit: 1000 });
-
-    if (!usuarios.length) {
-      return res.status(200).json({
-        ok: true,
-        mensaje: "No hay empresas pendientes para procesar"
-      });
-    }
-
-    const job = await crearJobSimel({
-      totalEmpresas: usuarios.length,
-      disparadoPor: "Manual",
-      detalle: "Job creado desde endpoint"
-    });
-
-    return res.status(200).json({
-      ok: true,
-      mensaje: "Job creado correctamente",
-      jobId: job.jobId,
-      totalEmpresas: usuarios.length
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.get("/jobs/simel/:jobId", async (req, res) => {
-  try {
-    const job = await obtenerJobPorTexto(req.params.jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        ok: false,
-        error: "Job no encontrado"
-      });
-    }
-
-    return res.status(200).json({
-      ok: true,
-      job
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-iniciarWorker();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
