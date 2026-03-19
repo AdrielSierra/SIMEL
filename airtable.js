@@ -6,7 +6,11 @@ const base = new Airtable({
 
 async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
   const records = await base(process.env.AIRTABLE_TABLE_NAME)
-    .select()
+    .select({
+      sort: [
+        { field: "Empresa", direction: "asc" }
+      ]
+    })
     .all();
 
   return records
@@ -32,7 +36,8 @@ async function actualizarResultadoSimel(resultado) {
         "Último check": new Date().toISOString().slice(0, 10),
         "Último estado": resultado.estado || "",
         "Último detalle": resultado.detalle || "",
-        "Cantidad filas pendientes": Number(resultado.filas || 0)
+        "Cantidad filas pendientes": Number(resultado.filas || 0),
+        "Ejecutar batch": false
       }
     }
   ]);
