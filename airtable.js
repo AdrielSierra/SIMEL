@@ -7,9 +7,7 @@ const base = new Airtable({
 async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
   const records = await base(process.env.AIRTABLE_TABLE_NAME)
     .select({
-      sort: [
-        { field: "Empresa", direction: "asc" }
-      ]
+      sort: [{ field: "Empresa", direction: "asc" }]
     })
     .all();
 
@@ -24,6 +22,25 @@ async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
     }))
     .filter((r) => !!r.activo && !!r.ejecutarBatch)
     .slice(0, limit);
+}
+
+async function obtenerTodosLosUsuariosSimelPendientes() {
+  const records = await base(process.env.AIRTABLE_TABLE_NAME)
+    .select({
+      sort: [{ field: "Empresa", direction: "asc" }]
+    })
+    .all();
+
+  return records
+    .map((record) => ({
+      recordId: record.id,
+      empresa: record.get("Empresa") || "",
+      usuario: record.get("Usuario") || "",
+      password: record.get("Password") || "",
+      activo: record.get("Activo"),
+      ejecutarBatch: record.get("Ejecutar batch")
+    }))
+    .filter((r) => !!r.activo && !!r.ejecutarBatch);
 }
 
 async function actualizarResultadoSimel(resultado) {
@@ -43,7 +60,118 @@ async function actualizarResultadoSimel(resultado) {
   ]);
 }
 
+async function crearJobSimel({ totalEmpresas, disparadoPor = "Sistema", detalle = "" }) {
+  const jobId = `JOB-${Date.now()}`;
+
+  const created = await base(process.env.AIRTABLE_JOBS_TABLE).create([
+    {
+      fields: {
+        "Job ID": jobId,
+        "Estado": "Pendiente",
+        "Total empresas": Number(totalEmpresas || 0),
+        "Procesadas": 0,
+        "Con manifiesto": 0,
+        "Sin manifiesto": 0,
+        "Con error": 0,
+        "Inicio": new Date().toISOString(),
+        "Detalle": detalle,
+        "Disparado por": disparadoPor
+      }
+    }
+  ]);
+
+  return {
+    airtableRecordId: created[0].id,
+    jobId
+  };
+}
+
+async function buscarJobPendiente() {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `{Estado}="Pendiente"`,
+      maxRecords: 1,
+      sort: [{ field: "Inicio", direction: "asc" }]
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0
+  };
+}
+
+async function actualizarJobSimel(airtableRecordId, fields) {
+  await base(process.env.AIRTABLE_JOBS_TABLE).update([
+    {
+      id: airtableRecordId,
+      fields
+    }
+  ]);
+}
+
+async function crearDetalleJobSimel({ jobRecordId, jobIdTexto, resultado }) {
+  await base(process.env.AIRTABLE_JOBS_DETAIL_TABLE).create([
+    {
+      fields: {
+        "Job": [jobRecordId],
+        "Empresa": resultado.empresa || "",
+        "Usuario": resultado.usuario || "",
+        "Estado": resultado.estado || "ERROR",
+        "Filas": Number(resultado.filas || 0),
+        "Detalle": resultado.detalle || "",
+        "Fecha": new Date().toISOString(),
+        "Record ID Usuario SIMEL": resultado.recordId || "",
+        "Job ID Texto": jobIdTexto || ""
+      }
+    }
+  ]);
+}
+
+async function obtenerJobPorTexto(jobId) {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `{Job ID}="${jobId}"`,
+      maxRecords: 1
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0,
+    inicio: r.get("Inicio") || "",
+    fin: r.get("Fin") || "",
+    detalle: r.get("Detalle") || ""
+  };
+}
+
 module.exports = {
   obtenerUsuariosSimelActivos,
-  actualizarResultadoSimel
+  obtenerTodosLosUsuariosSimelPendientes,
+  actualizarResultadoSimel,
+  crearJobSimel,
+  buscarJobPendiente,
+  actualizarJobSimel,
+  crearDetalleJobSimel,
+  obtenerJobPorTexto
 };
