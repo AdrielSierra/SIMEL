@@ -59,7 +59,9 @@ async function procesarJobPendiente() {
         else if (resultado.estado === "SIN_MANIFIESTO") sinManifiesto++;
         else conError++;
 
-        console.log(`[Worker] Procesada empresa ${procesadas}/${usuarios.length}: ${item.empresa} (${resultado.estado})`);
+        console.log(
+          `[Worker] Procesada empresa ${procesadas}/${usuarios.length}: ${item.empresa} (${resultado.estado})`
+        );
 
         await actualizarJobSimel(job.airtableRecordId, {
           "Procesadas": procesadas,
@@ -70,6 +72,7 @@ async function procesarJobPendiente() {
         });
       } catch (itemError) {
         console.error(`[Worker] Error procesando empresa ${item.empresa}:`, itemError.message);
+
         conError++;
         procesadas++;
 
@@ -85,10 +88,20 @@ async function procesarJobPendiente() {
             recordId: item.recordId
           }
         });
+
+        await actualizarJobSimel(job.airtableRecordId, {
+          "Procesadas": procesadas,
+          "Con manifiesto": conManifiesto,
+          "Sin manifiesto": sinManifiesto,
+          "Con error": conError,
+          "Detalle": `Procesadas ${procesadas} de ${usuarios.length}`
+        });
       }
     }
 
-    console.log(`[Worker] Job ${job.jobId} finalizado. Procesadas ${procesadas}, Con manifiesto ${conManifiesto}, Sin manifiesto ${sinManifiesto}, Con error ${conError}`);
+    console.log(
+      `[Worker] Job ${job.jobId} finalizado. Procesadas ${procesadas}, Con manifiesto ${conManifiesto}, Sin manifiesto ${sinManifiesto}, Con error ${conError}`
+    );
 
     await actualizarJobSimel(job.airtableRecordId, {
       "Estado": "Finalizado",
@@ -102,7 +115,6 @@ async function procesarJobPendiente() {
   } catch (error) {
     console.error("[Worker] Error crítico:", error.message);
 
-    // Si hay error crítico y tenemos el job, marcarlo como Error
     if (job) {
       try {
         await actualizarJobSimel(job.airtableRecordId, {
@@ -123,7 +135,9 @@ async function procesarJobPendiente() {
 function iniciarWorker() {
   console.log("[Worker] Iniciando worker de background. Revisando jobs cada 15 segundos...");
   setInterval(() => {
-    procesarJobPendiente().catch((err) => console.error("[Worker] Error no capturado en procesarJobPendiente:", err));
+    procesarJobPendiente().catch((err) => {
+      console.error("[Worker] Error no capturado en procesarJobPendiente:", err);
+    });
   }, 15000);
 }
 
