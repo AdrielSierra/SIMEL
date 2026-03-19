@@ -1,7 +1,10 @@
 const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
-const { obtenerUsuariosSimelActivos } = require("./airtable");
+const {
+  obtenerUsuariosSimelActivos,
+  actualizarResultadoSimel
+} = require("./airtable");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -28,12 +31,23 @@ app.get("/check", async (req, res) => {
     if (!user || !pass) {
       return res.status(400).json({
         ok: false,
-        error: "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
+        error: "Faltan credenciales"
       });
     }
 
     const resultado = await checkSimel(user, pass);
-    return res.status(200).json(resultado);
+    return res.status(200).json({
+      ok: resultado.ok,
+      usuario: resultado.usuario,
+      estado: resultado.estado,
+      filas: resultado.filas,
+      mensaje:
+        resultado.estado === "CON_MANIFIESTO"
+          ? `Se encontraron ${resultado.filas} manifiesto(s) pendientes.`
+          : resultado.estado === "SIN_MANIFIESTO"
+          ? "No hay manifiestos pendientes."
+          : resultado.detalle
+    });
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -54,7 +68,11 @@ app.post("/batch/run", async (req, res) => {
     }
 
     const usuarios = req.body.usuarios;
-    const resultado = await runBatch({ usuarios });
+
+    const resultado = await runBatch({
+      usuarios,
+      onResultado: actualizarResultadoSimel
+    });
 
     return res.status(200).json(resultado);
   } catch (error) {
@@ -68,6 +86,7 @@ app.post("/batch/run", async (req, res) => {
 app.get("/batch/url-run", async (req, res) => {
   try {
     const token = req.query.token;
+    const limit = Number(req.query.limit || 5);
 
     if (!process.env.BATCH_URL_TOKEN || token !== process.env.BATCH_URL_TOKEN) {
       return res.status(401).json({
@@ -76,17 +95,21 @@ app.get("/batch/url-run", async (req, res) => {
       });
     }
 
-    const usuarios = await obtenerUsuariosSimelActivos();
+    const usuarios = await obtenerUsuariosSimelActivos({ limit });
 
     if (!usuarios.length) {
       return res.status(200).json({
         ok: true,
         total: 0,
-        mensaje: "No hay usuarios activos en Airtable"
+        mensaje: "No hay usuarios activos para batch"
       });
     }
 
-    const resultado = await runBatch({ usuarios });
+    const resultado = await runBatch({
+      usuarios,
+      onResultado: actualizarResultadoSimel
+    });
+
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
