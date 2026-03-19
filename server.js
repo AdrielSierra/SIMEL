@@ -1,10 +1,13 @@
 const express = require("express");
 const { checkSimel } = require("./simel-check");
-const { runBatch } = require("./simel-batch");
 const {
   obtenerUsuariosSimelActivos,
-  actualizarResultadoSimel
+  actualizarResultadoSimel,
+  crearJobSimel,
+  obtenerJobPorTexto
 } = require("./airtable");
+const { runBatch } = require("./simel-batch");
+const { iniciarWorker } = require("./worker");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -118,6 +121,71 @@ app.get("/batch/url-run", async (req, res) => {
     });
   }
 });
+
+app.post("/jobs/simel/start", async (req, res) => {
+  try {
+    const secret = req.headers["x-batch-secret"];
+
+    if (!process.env.BATCH_SECRET || secret !== process.env.BATCH_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: "No autorizado"
+      });
+    }
+
+    const usuarios = await obtenerUsuariosSimelActivos({ limit: 1000 });
+
+    if (!usuarios.length) {
+      return res.status(200).json({
+        ok: true,
+        mensaje: "No hay empresas pendientes para procesar"
+      });
+    }
+
+    const job = await crearJobSimel({
+      totalEmpresas: usuarios.length,
+      disparadoPor: "Manual",
+      detalle: "Job creado desde endpoint"
+    });
+
+    return res.status(200).json({
+      ok: true,
+      mensaje: "Job creado correctamente",
+      jobId: job.jobId,
+      totalEmpresas: usuarios.length
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.get("/jobs/simel/:jobId", async (req, res) => {
+  try {
+    const job = await obtenerJobPorTexto(req.params.jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: "Job no encontrado"
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      job
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+iniciarWorker();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
