@@ -1,85 +1,80 @@
 const { checkSimel } = require("./simel-check");
 
-async function runBatch({ usuarios }) {
+async function runBatch({ usuarios, onResultado }) {
   if (!Array.isArray(usuarios) || usuarios.length === 0) {
     throw new Error("Falta el array de usuarios");
   }
 
-  const resultados = [];
-  const conManifiesto = [];
-  const sinManifiesto = [];
-  const conError = [];
+  const resumen = {
+    ok: true,
+    total: usuarios.length,
+    revisados: 0,
+    cantidadConManifiesto: 0,
+    cantidadSinManifiesto: 0,
+    cantidadConError: 0,
+    empresasConManifiesto: [],
+    empresasSinManifiesto: [],
+    empresasConError: []
+  };
 
   for (const item of usuarios) {
     const empresa = String(item.empresa || "").trim();
     const usuario = String(item.usuario || "").trim();
     const password = String(item.password || "").trim();
+    const recordId = item.recordId || null;
+
+    let resultado;
 
     if (!empresa || !usuario || !password) {
-      const r = {
+      resultado = {
         ok: false,
         empresa,
         usuario,
-        hayManifiesto: false,
         filas: 0,
         estado: "ERROR",
         detalle: "Datos incompletos",
-        error: "DATOS_INCOMPLETOS"
+        error: "DATOS_INCOMPLETOS",
+        recordId
       };
-      resultados.push(r);
-      conError.push(r);
-      continue;
+    } else {
+      const r = await checkSimel(usuario, password);
+      resultado = {
+        ...r,
+        empresa,
+        recordId
+      };
     }
 
-    const resultado = await checkSimel(usuario, password);
+    resumen.revisados++;
 
-    const enriquecido = {
-      ...resultado,
-      empresa
-    };
-
-    resultados.push(enriquecido);
-
-    if (enriquecido.estado === "CON_MANIFIESTO") {
-      conManifiesto.push({
-        empresa: enriquecido.empresa,
-        usuario: enriquecido.usuario,
-        filas: enriquecido.filas,
-        estado: enriquecido.estado,
-        detalle: enriquecido.detalle
+    if (resultado.estado === "CON_MANIFIESTO") {
+      resumen.cantidadConManifiesto++;
+      resumen.empresasConManifiesto.push({
+        empresa: resultado.empresa,
+        usuario: resultado.usuario,
+        filas: resultado.filas
       });
-    } else if (enriquecido.estado === "SIN_MANIFIESTO") {
-      sinManifiesto.push({
-        empresa: enriquecido.empresa,
-        usuario: enriquecido.usuario,
-        filas: enriquecido.filas,
-        estado: enriquecido.estado,
-        detalle: enriquecido.detalle
+    } else if (resultado.estado === "SIN_MANIFIESTO") {
+      resumen.cantidadSinManifiesto++;
+      resumen.empresasSinManifiesto.push({
+        empresa: resultado.empresa,
+        usuario: resultado.usuario
       });
     } else {
-      conError.push({
-        empresa: enriquecido.empresa,
-        usuario: enriquecido.usuario,
-        filas: enriquecido.filas,
-        estado: enriquecido.estado,
-        detalle: enriquecido.detalle,
-        error: enriquecido.error
+      resumen.cantidadConError++;
+      resumen.empresasConError.push({
+        empresa: resultado.empresa,
+        usuario: resultado.usuario,
+        detalle: resultado.detalle
       });
+    }
+
+    if (typeof onResultado === "function") {
+      await onResultado(resultado);
     }
   }
 
-  return {
-    ok: true,
-    total: usuarios.length,
-    revisados: resultados.length,
-    cantidadConManifiesto: conManifiesto.length,
-    cantidadSinManifiesto: sinManifiesto.length,
-    cantidadConError: conError.length,
-    conManifiesto,
-    sinManifiesto,
-    conError,
-    resultados
-  };
+  return resumen;
 }
 
 module.exports = { runBatch };
