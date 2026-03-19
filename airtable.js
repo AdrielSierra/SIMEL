@@ -111,6 +111,31 @@ async function buscarJobPendiente() {
   };
 }
 
+async function buscarJobPendienteOEnProceso() {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `OR({Estado}="Pendiente", {Estado}="En proceso")`,
+      maxRecords: 1,
+      sort: [{ field: "Inicio", direction: "asc" }]
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0
+  };
+}
+
 async function actualizarJobSimel(airtableRecordId, fields) {
   await base(process.env.AIRTABLE_JOBS_TABLE).update([
     {
@@ -130,7 +155,7 @@ async function crearDetalleJobSimel({ jobRecordId, jobIdTexto, resultado }) {
         "Estado": resultado.estado || "ERROR",
         "Filas": Number(resultado.filas || 0),
         "Detalle": resultado.detalle || "",
-        "Fecha": new Date().toISOString(),
+        "Fecha": new Date().toISOString().slice(0, 10),
         "Record ID Usuario SIMEL": resultado.recordId || "",
         "Job ID Texto": jobIdTexto || ""
       }
@@ -171,6 +196,7 @@ module.exports = {
   actualizarResultadoSimel,
   crearJobSimel,
   buscarJobPendiente,
+  buscarJobPendienteOEnProceso,
   actualizarJobSimel,
   crearDetalleJobSimel,
   obtenerJobPorTexto

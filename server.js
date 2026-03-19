@@ -4,6 +4,7 @@ const {
   obtenerUsuariosSimelActivos,
   actualizarResultadoSimel,
   crearJobSimel,
+  buscarJobPendienteOEnProceso,
   obtenerJobPorTexto
 } = require("./airtable");
 const { runBatch } = require("./simel-batch");
@@ -130,6 +131,19 @@ app.post("/jobs/simel/start", async (req, res) => {
       return res.status(401).json({
         ok: false,
         error: "No autorizado"
+      });
+    }
+
+    // Verificar si ya existe un job pendiente o en proceso
+    const jobExistente = await buscarJobPendienteOEnProceso();
+    if (jobExistente) {
+      return res.status(200).json({
+        ok: false,
+        mensaje: `Ya existe un job en curso (${jobExistente.estado})`,
+        jobId: jobExistente.jobId,
+        estado: jobExistente.estado,
+        procesadas: jobExistente.procesadas,
+        totalEmpresas: jobExistente.totalEmpresas
       });
     }
 
