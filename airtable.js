@@ -1,192 +1,203 @@
+const Airtable = require("airtable");
 
-const { checkSimel } = require("./simel-check");
-const { runBatch } = require("./simel-batch");
-const {
+const base = new Airtable({
+  apiKey: process.env.AIRTABLE_TOKEN
+}).base(process.env.AIRTABLE_BASE_ID);
+
+async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
+  const records = await base(process.env.AIRTABLE_TABLE_NAME)
+    .select({
+      sort: [{ field: "Empresa", direction: "asc" }]
+    })
+    .all();
+
+  return records
+    .map((record) => ({
+      recordId: record.id,
+      empresa: record.get("Empresa") || "",
+      usuario: record.get("Usuario") || "",
+      password: record.get("Password") || "",
+      activo: record.get("Activo"),
+      ejecutarBatch: record.get("Ejecutar batch")
+    }))
+    .filter((r) => !!r.activo && !!r.ejecutarBatch)
+    .slice(0, limit);
+}
+
+async function obtenerTodosLosUsuariosSimelPendientes() {
+  const records = await base(process.env.AIRTABLE_TABLE_NAME)
+    .select({
+      sort: [{ field: "Empresa", direction: "asc" }]
+    })
+    .all();
+
+  return records
+    .map((record) => ({
+      recordId: record.id,
+      empresa: record.get("Empresa") || "",
+      usuario: record.get("Usuario") || "",
+      password: record.get("Password") || "",
+      activo: record.get("Activo"),
+      ejecutarBatch: record.get("Ejecutar batch")
+    }))
+    .filter((r) => !!r.activo && !!r.ejecutarBatch);
+}
+
+async function actualizarResultadoSimel(resultado) {
+  if (!resultado.recordId) return;
+
+  await base(process.env.AIRTABLE_TABLE_NAME).update([
+    {
+      id: resultado.recordId,
+      fields: {
+        "Último check": new Date().toISOString().slice(0, 10),
+        "Último estado": resultado.estado || "",
+        "Último detalle": resultado.detalle || "",
+        "Cantidad filas pendientes": Number(resultado.filas || 0),
+        "Ejecutar batch": false
+      }
+    }
+  ]);
+}
+
+async function crearJobSimel({ totalEmpresas, disparadoPor = "Sistema", detalle = "" }) {
+  const jobId = `JOB-${Date.now()}`;
+
+  const created = await base(process.env.AIRTABLE_JOBS_TABLE).create([
+    {
+      fields: {
+        "Job ID": jobId,
+        "Estado": "Pendiente",
+        "Total empresas": Number(totalEmpresas || 0),
+        "Procesadas": 0,
+        "Con manifiesto": 0,
+        "Sin manifiesto": 0,
+        "Con error": 0,
+        "Inicio": new Date().toISOString(),
+        "Detalle": detalle,
+        "Disparado por": disparadoPor
+      }
+    }
+  ]);
+
+  return {
+    airtableRecordId: created[0].id,
+    jobId
+  };
+}
+
+async function buscarJobPendiente() {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `{Estado}="Pendiente"`,
+      maxRecords: 1,
+      sort: [{ field: "Inicio", direction: "asc" }]
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0
+  };
+}
+
+async function buscarJobPendienteOEnProceso() {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `OR({Estado}="Pendiente", {Estado}="En proceso")`,
+      maxRecords: 1,
+      sort: [{ field: "Inicio", direction: "asc" }]
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0
+  };
+}
+
+async function actualizarJobSimel(airtableRecordId, fields) {
+  await base(process.env.AIRTABLE_JOBS_TABLE).update([
+    {
+      id: airtableRecordId,
+      fields
+    }
+  ]);
+}
+
+async function crearDetalleJobSimel({ jobRecordId, jobIdTexto, resultado }) {
+  await base(process.env.AIRTABLE_JOBS_DETAIL_TABLE).create([
+    {
+      fields: {
+        "Job": [jobRecordId],
+        "Empresa": resultado.empresa || "",
+        "Usuario": resultado.usuario || "",
+        "Estado": resultado.estado || "ERROR",
+        "Filas": Number(resultado.filas || 0),
+        "Detalle": resultado.detalle || "",
+        "Fecha": new Date().toISOString().slice(0, 10),
+        "Record ID Usuario SIMEL": resultado.recordId || "",
+        "Job ID Texto": jobIdTexto || ""
+      }
+    }
+  ]);
+}
+
+async function obtenerJobPorTexto(jobId) {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      filterByFormula: `{Job ID}="${jobId}"`,
+      maxRecords: 1
+    })
+    .all();
+
+  if (!records.length) return null;
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID"),
+    estado: r.get("Estado"),
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0,
+    inicio: r.get("Inicio") || "",
+    fin: r.get("Fin") || "",
+    detalle: r.get("Detalle") || ""
+  };
+}
+
+module.exports = {
   obtenerUsuariosSimelActivos,
+  obtenerTodosLosUsuariosSimelPendientes,
   actualizarResultadoSimel,
   crearJobSimel,
+  buscarJobPendiente,
   buscarJobPendienteOEnProceso,
+  actualizarJobSimel,
+  crearDetalleJobSimel,
   obtenerJobPorTexto
-} = require("./airtable");
-const { iniciarWorker };
-
-
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("SIMEL bot funcionando en Railway 🚀");
-});
-
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    ok: true,
-    service: "simel-bot",
-    timestamp: new Date().toISOString()
-  });
-});
-
-app.get("/check", async (req, res) => {
-  try {
-    const user = req.query.user || process.env.SIMEL_USER;
-    const pass = req.query.pass || process.env.SIMEL_PASS;
-
-    if (!user || !pass) {
-      return res.status(400).json({
-        ok: false,
-        error: "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
-      });
-    }
-
-    const resultado = await checkSimel(user, pass);
-    return res.status(200).json(resultado);
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.post("/batch/run", async (req, res) => {
-  try {
-    const secret = req.headers["x-batch-secret"];
-
-    if (!process.env.BATCH_SECRET || secret !== process.env.BATCH_SECRET) {
-      return res.status(401).json({
-        ok: false,
-        error: "No autorizado"
-      });
-    }
-
-    const usuarios = req.body.usuarios;
-    const resultado = await runBatch({
-      usuarios,
-      onResultado: actualizarResultadoSimel
-    });
-
-    return res.status(200).json(resultado);
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.get("/batch/url-run", async (req, res) => {
-  try {
-    const token = req.query.token;
-    const limit = Number(req.query.limit || 5);
-
-    if (!process.env.BATCH_URL_TOKEN || token !== process.env.BATCH_URL_TOKEN) {
-      return res.status(401).json({
-        ok: false,
-        error: "Token inválido"
-      });
-    }
-
-    const usuarios = await obtenerUsuariosSimelActivos({ limit });
-
-    if (!usuarios.length) {
-      return res.status(200).json({
-        ok: true,
-        total: 0,
-        mensaje: "No hay usuarios activos para batch"
-      });
-    }
-
-    const resultado = await runBatch({
-      usuarios,
-      onResultado: actualizarResultadoSimel
-    });
-
-    return res.status(200).json(resultado);
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.post("/jobs/simel/start", async (req, res) => {
-  try {
-    const secret = req.headers["x-batch-secret"];
-
-    if (!process.env.BATCH_SECRET || secret !== process.env.BATCH_SECRET) {
-      return res.status(401).json({
-        ok: false,
-        error: "No autorizado"
-      });
-    }
-
-    const jobExistente = await buscarJobPendienteOEnProceso();
-
-    if (jobExistente) {
-      return res.status(200).json({
-        ok: false,
-        mensaje: `Ya existe un job en curso (${jobExistente.estado})`,
-        jobId: jobExistente.jobId,
-        estado: jobExistente.estado
-      });
-    }
-
-    const usuarios = await obtenerUsuariosSimelActivos({ limit: 1000 });
-
-    if (!usuarios.length) {
-      return res.status(200).json({
-        ok: true,
-        mensaje: "No hay empresas pendientes para procesar"
-      });
-    }
-
-    const job = await crearJobSimel({
-      totalEmpresas: usuarios.length,
-      disparadoPor: "Manual",
-      detalle: "Job creado desde endpoint"
-    });
-
-    return res.status(200).json({
-      ok: true,
-      mensaje: "Job creado correctamente",
-      jobId: job.jobId,
-      totalEmpresas: usuarios.length
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-app.get("/jobs/simel/:jobId", async (req, res) => {
-  try {
-    const job = await obtenerJobPorTexto(req.params.jobId);
-
-    if (!job) {
-      return res.status(404).json({
-        ok: false,
-        error: "Job no encontrado"
-      });
-    }
-
-    return res.status(200).json({
-      ok: true,
-      job
-    });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
-  }
-});
-
-iniciarWorker();
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`);
-});
+};
