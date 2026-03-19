@@ -1,5 +1,6 @@
 const express = require("express");
 const { checkSimel } = require("./simel-check");
+const { runBatch } = require("./simel-batch");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -31,6 +32,29 @@ app.get("/check", async (req, res) => {
     }
 
     const resultado = await checkSimel(user, pass);
+    return res.status(200).json(resultado);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.post("/batch/run", async (req, res) => {
+  try {
+    const secret = req.headers["x-batch-secret"];
+
+    if (!process.env.BATCH_SECRET || secret !== process.env.BATCH_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: "No autorizado"
+      });
+    }
+
+    const usuarios = req.body.usuarios;
+    const resultado = await runBatch({ usuarios });
+
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
