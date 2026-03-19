@@ -6,16 +6,18 @@ const base = new Airtable({
 
 async function obtenerUsuariosSimelActivos() {
   const records = await base(process.env.AIRTABLE_TABLE_NAME)
-    .select({
-      filterByFormula: "{Activo}=1"
-    })
+    .select()
     .all();
 
-  return records.map((record) => ({
-    empresa: record.get("Empresa") || "",
-    usuario: record.get("Usuario") || "",
-    password: record.get("Password") || ""
-  }));
+  return records
+    .map((record) => ({
+      empresa: record.get("Empresa") || "",
+      usuario: record.get("Usuario") || "",
+      password: record.get("Password") || "",
+      activo: record.get("Activo"),
+      ejecutarBatch: record.get("Ejecutar batch")
+    }))
+    .filter((r) => !!r.activo);
 }
 
 module.exports = { obtenerUsuariosSimelActivos };
