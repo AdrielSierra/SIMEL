@@ -29,7 +29,7 @@ async function actualizarResultadoSimel(resultado) {
     {
       id: resultado.recordId,
       fields: {
-        "Último check": new Date().toISOString(),
+        "Último check": new Date().toISOString().slice(0, 10),
         "Último estado": resultado.estado || "",
         "Último detalle": resultado.detalle || "",
         "Cantidad filas pendientes": Number(resultado.filas || 0)
