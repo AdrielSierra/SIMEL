@@ -17,7 +17,8 @@ async function obtenerUsuariosSimelActivos() {
       activo: record.get("Activo"),
       ejecutarBatch: record.get("Ejecutar batch")
     }))
-    .filter((r) => !!r.activo);
+    .filter((r) => !!r.activo && !!r.ejecutarBatch)
+    .slice(0, 3);
 }
 
 module.exports = { obtenerUsuariosSimelActivos };
