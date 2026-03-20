@@ -1,6 +1,31 @@
 const { chromium } = require('playwright');
 
 async function checkSimel(user, pass) {
+async function abrirPendientes(page) {
+  const intentos = [
+    page.getByRole('link', { name: /pendientes/i }).first(),
+    page.getByRole('button', { name: /pendientes/i }).first(),
+    page.locator('a, button, span, div').filter({ hasText: /^Pendientes$/i }).first(),
+    page.getByText(/^Pendientes$/i).first()
+  ];
+
+  let ultimoError = null;
+
+  for (const locator of intentos) {
+    try {
+      await locator.waitFor({ state: 'visible', timeout: 15000 });
+      await locator.click({ timeout: 15000 });
+      await page.getByText(/MANIFIESTOS PENDIENTES/i).waitFor({ timeout: 30000 });
+      return;
+    } catch (error) {
+      ultimoError = error;
+    }
+  }
+
+  throw new Error(
+    `No se pudo abrir la sección Pendientes.${ultimoError ? ' ' + ultimoError.message : ''}`
+  );
+}
   if (!user || !pass) {
     return {
       ok: false,
@@ -25,20 +50,21 @@ async function checkSimel(user, pass) {
       timeout: 60000,
     });
 
-    await page.locator('input').nth(0).fill(user);
-    await page.locator('input').nth(1).fill(pass);
-    await page.getByRole('button', { name: /ingresar/i }).click();
+   await page.locator('input').nth(0).fill(user);
+await page.locator('input').nth(1).fill(pass);
+await page.getByRole('button', { name: /ingresar/i }).click();
 
-    await page.waitForLoadState('networkidle', { timeout: 60000 });
+await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+await page.waitForTimeout(2000);
 
-    await page.getByText(/^Pendientes$/i).first().click();
-    await page.getByText(/MANIFIESTOS PENDIENTES/i).waitFor({ timeout: 30000 });
+await abrirPendientes(page);
 
-    const sinResultados = await page
-      .getByText(/No se han encontrado resultados\./i)
-      .isVisible()
-      .catch(() => false);
+const sinResultados = await page
+  .getByText(/No se han encontrado resultados\./i)
+  .isVisible()
+  .catch(() => false);
 
+  
     let hayManifiesto = false;
     let filas = 0;
     let estado = 'SIN_MANIFIESTO';
