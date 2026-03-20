@@ -208,8 +208,39 @@ async function obtenerDetallesJobSimel(jobId) {
     jobIdTexto: r.get("Job ID Texto") || ""
   }));
 }
+
+async function obtenerUltimoJobSimel() {
+  const records = await base(process.env.AIRTABLE_JOBS_TABLE)
+    .select({
+      sort: [{ field: "Inicio", direction: "desc" }],
+      maxRecords: 1
+    })
+    .all();
+
+  if (!records.length) {
+    return null;
+  }
+
+  const r = records[0];
+
+  return {
+    airtableRecordId: r.id,
+    jobId: r.get("Job ID") || "",
+    estado: r.get("Estado") || "",
+    totalEmpresas: r.get("Total empresas") || 0,
+    procesadas: r.get("Procesadas") || 0,
+    conManifiesto: r.get("Con manifiesto") || 0,
+    sinManifiesto: r.get("Sin manifiesto") || 0,
+    conError: r.get("Con error") || 0,
+    inicio: r.get("Inicio") || "",
+    fin: r.get("Fin") || "",
+    detalle: r.get("Detalle") || "",
+    disparadoPor: r.get("Disparado por") || ""
+  };
+}
+
 module.exports = {
-  obtenerUsuariosSimelActivos,
+   obtenerUsuariosSimelActivos,
   obtenerTodosLosUsuariosSimelPendientes,
   actualizarResultadoSimel,
   crearJobSimel,
@@ -218,5 +249,6 @@ module.exports = {
   actualizarJobSimel,
   crearDetalleJobSimel,
   obtenerJobPorTexto,
-  obtenerDetallesJobSimel
+  obtenerDetallesJobSimel,
+  obtenerUltimoJobSimel
 };
