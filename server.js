@@ -177,13 +177,22 @@ app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
     }
 
     const items = await obtenerDetallesJobSimel(jobId);
+    
+    const resumen = {
+  ok: items.filter((x) => x.estado === "OK").length,
+  sinManifiesto: items.filter((x) => x.estado === "SIN_MANIFIESTO").length,
+  error: items.filter((x) => x.estado === "ERROR").length
+};
+
 
     return res.status(200).json({
-      ok: true,
-      jobId,
-      total: items.length,
-      items
-    });
+  ok: true,
+  jobId,
+  total: items.length,
+  resumen,
+  items
+});
+
   } catch (error) {
     return res.status(500).json({
       ok: false,
