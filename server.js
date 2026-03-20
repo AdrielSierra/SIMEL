@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
@@ -300,6 +301,37 @@ app.get("/jobs/simel/:jobId", async (req, res) => {
       job
     });
   } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.get("/whatsapp/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === process.env.WHATSAPP_VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+
+  return res.status(403).json({
+    ok: false,
+    error: "Verificación inválida"
+  });
+});
+
+app.post("/whatsapp/webhook", async (req, res) => {
+  try {
+    console.log("[WhatsApp] Webhook recibido:");
+    console.log(JSON.stringify(req.body, null, 2));
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("[WhatsApp] Error en webhook:", error.message);
+
     return res.status(500).json({
       ok: false,
       error: error.message
