@@ -177,7 +177,7 @@ app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
     }
 
     const items = await obtenerDetallesJobSimel(jobId);
-    
+
     const resumen = {
   ok: items.filter((x) => x.estado === "OK").length,
   sinManifiesto: items.filter((x) => x.estado === "SIN_MANIFIESTO").length,
@@ -193,6 +193,36 @@ app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
   items
 });
 
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.get("/jobs/simel/:jobId/errores", async (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+
+    const job = await obtenerJobPorTexto(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: "Job no encontrado"
+      });
+    }
+
+    const items = await obtenerDetallesJobSimel(jobId);
+    const errores = items.filter((x) => x.estado === "ERROR");
+
+    return res.status(200).json({
+      ok: true,
+      jobId,
+      totalErrores: errores.length,
+      items: errores
+    });
   } catch (error) {
     return res.status(500).json({
       ok: false,
