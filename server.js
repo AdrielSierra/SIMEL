@@ -165,6 +165,34 @@ app.post("/jobs/simel/start", async (req, res) => {
   }
 });
 
+app.get("/jobs/simel/ultimo/errores", async (req, res) => {
+  try {
+    const job = await obtenerUltimoJobSimel();
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: "No hay jobs registrados"
+      });
+    }
+
+    const items = await obtenerDetallesJobSimel(job.jobId);
+    const errores = items.filter((x) => x.estado === "ERROR");
+
+    return res.status(200).json({
+      ok: true,
+      jobId: job.jobId,
+      totalErrores: errores.length,
+      items: errores
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
 app.get("/jobs/simel/ultimo", async (req, res) => {
   try {
     const job = await obtenerUltimoJobSimel();
