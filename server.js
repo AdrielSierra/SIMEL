@@ -1,4 +1,3 @@
-const crypto = require("crypto");
 const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
@@ -9,9 +8,8 @@ const {
   buscarJobPendienteOEnProceso,
   obtenerJobPorTexto,
   obtenerDetallesJobSimel,
-  obtenerUltimoJobSimel,
-} = require("./airtable"); 
-
+  obtenerUltimoJobSimel
+} = require("./airtable");
 const { iniciarWorker } = require("./worker");
 
 const app = express();
@@ -19,8 +17,56 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+function armarResumenDetalle(items) {
+  return {
+    ok: items.filter((x) => x.estado === "OK").length,
+    sinManifiesto: items.filter((x) => x.estado === "SIN_MANIFIESTO").length,
+    error: items.filter((x) => x.estado === "ERROR").length
+  };
+}
+
+async function enviarWhatsAppTexto({ to, body }) {
+  if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    throw new Error("Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
+  }
+
+  const version = process.env.WHATSAPP_API_VERSION || "v22.0";
+  const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "text",
+    text: { body }
+  };
+
+  console.log("[WhatsApp] Enviando mensaje a:", to);
+  console.log("[WhatsApp] Payload:", JSON.stringify(payload));
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  console.log("[WhatsApp] Status envío:", response.status);
+  console.log("[WhatsApp] Respuesta Graph:", JSON.stringify(data));
+
+  if (!response.ok) {
+    throw new Error(`WhatsApp API error: ${response.status} - ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
 app.get("/", (req, res) => {
-  res.send("SIMEL bot funcionando en Railway 🚀 - version con detalle");
+  res.send("SIMEL bot funcionando en Railway 🚀 - WhatsApp activo");
 });
 
 app.get("/health", (req, res) => {
@@ -44,6 +90,7 @@ app.get("/check", async (req, res) => {
     }
 
     const resultado = await checkSimel(user, pass);
+
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
@@ -65,6 +112,7 @@ app.post("/batch/run", async (req, res) => {
     }
 
     const usuarios = req.body.usuarios;
+
     const resultado = await runBatch({
       usuarios,
       onResultado: actualizarResultadoSimel
@@ -220,7 +268,6 @@ app.get("/jobs/simel/ultimo", async (req, res) => {
 app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
   try {
     const jobId = req.params.jobId;
-
     const job = await obtenerJobPorTexto(jobId);
 
     if (!job) {
@@ -231,22 +278,15 @@ app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
     }
 
     const items = await obtenerDetallesJobSimel(jobId);
-
-    const resumen = {
-  ok: items.filter((x) => x.estado === "OK").length,
-  sinManifiesto: items.filter((x) => x.estado === "SIN_MANIFIESTO").length,
-  error: items.filter((x) => x.estado === "ERROR").length
-};
-
+    const resumen = armarResumenDetalle(items);
 
     return res.status(200).json({
-  ok: true,
-  jobId,
-  total: items.length,
-  resumen,
-  items
-});
-
+      ok: true,
+      jobId,
+      total: items.length,
+      resumen,
+      items
+    });
   } catch (error) {
     return res.status(500).json({
       ok: false,
@@ -258,7 +298,6 @@ app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
 app.get("/jobs/simel/:jobId/errores", async (req, res) => {
   try {
     const jobId = req.params.jobId;
-
     const job = await obtenerJobPorTexto(jobId);
 
     if (!job) {
@@ -308,44 +347,6 @@ app.get("/jobs/simel/:jobId", async (req, res) => {
   }
 });
 
-async function enviarWhatsAppTexto({ to, body, contextMessageId }) {
-  if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
-    throw new Error("Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
-  }
-
-  const version = process.env.WHATSAPP_API_VERSION || "v22.0";
-  const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
-
-  const payload = {
-    messaging_product: "whatsapp",
-    recipient_type: "individual",
-    to,
-    type: "text",
-    text: { body }
-  };
-
-  if (contextMessageId) {
-    payload.context = { message_id: contextMessageId };
-  }
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(payload)
-  });
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(`WhatsApp API error: ${response.status} - ${JSON.stringify(data)}`);
-  }
-
-  return data;
-}
-
 app.get("/whatsapp/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -363,6 +364,8 @@ app.get("/whatsapp/webhook", (req, res) => {
 
 app.post("/whatsapp/webhook", async (req, res) => {
   try {
+    console.log("[WhatsApp] Payload crudo:", JSON.stringify(req.body));
+
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
@@ -376,7 +379,6 @@ app.post("/whatsapp/webhook", async (req, res) => {
     const from = message.from || "";
     const type = message.type || "";
     const text = (message.text?.body || "").trim();
-    const messageId = message.id || "";
 
     console.log("[WhatsApp] Mensaje recibido");
     console.log("From:", from);
@@ -384,6 +386,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
     console.log("Text:", text);
 
     if (type !== "text") {
+      console.log("[WhatsApp] Tipo no soportado, no se responde");
       return res.status(200).json({ ok: true });
     }
 
@@ -428,8 +431,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     await enviarWhatsAppTexto({
       to: from,
-      body: respuesta,
-      contextMessageId: messageId
+      body: respuesta
     });
 
     console.log("[WhatsApp] Respuesta enviada correctamente");
