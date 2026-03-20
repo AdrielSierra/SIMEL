@@ -9,7 +9,7 @@ const {
   buscarJobPendienteOEnProceso,
   obtenerJobPorTexto,
   obtenerDetallesJobSimel,
-  obtenerUltimoJobSimel
+  obtenerUltimoJobSimel,
 } = require("./airtable"); 
 
 const { iniciarWorker } = require("./worker");
@@ -308,6 +308,44 @@ app.get("/jobs/simel/:jobId", async (req, res) => {
   }
 });
 
+async function enviarWhatsAppTexto({ to, body, contextMessageId }) {
+  if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    throw new Error("Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
+  }
+
+  const version = process.env.WHATSAPP_API_VERSION || "v22.0";
+  const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "text",
+    text: { body }
+  };
+
+  if (contextMessageId) {
+    payload.context = { message_id: contextMessageId };
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`WhatsApp API error: ${response.status} - ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
 app.get("/whatsapp/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -325,8 +363,76 @@ app.get("/whatsapp/webhook", (req, res) => {
 
 app.post("/whatsapp/webhook", async (req, res) => {
   try {
-    console.log("[WhatsApp] Webhook recibido:");
-    console.log(JSON.stringify(req.body, null, 2));
+    const entry = req.body?.entry?.[0];
+    const changes = entry?.changes?.[0];
+    const value = changes?.value;
+    const message = value?.messages?.[0];
+
+    if (!message) {
+      console.log("[WhatsApp] Evento sin mensaje");
+      return res.status(200).json({ ok: true });
+    }
+
+    const from = message.from || "";
+    const type = message.type || "";
+    const text = (message.text?.body || "").trim();
+    const messageId = message.id || "";
+
+    console.log("[WhatsApp] Mensaje recibido");
+    console.log("From:", from);
+    console.log("Type:", type);
+    console.log("Text:", text);
+
+    if (type !== "text") {
+      return res.status(200).json({ ok: true });
+    }
+
+    let respuesta = "Comando no reconocido.\n\nProbá:\n- simel estado\n- simel errores";
+
+    if (/^simel estado$/i.test(text)) {
+      const job = await obtenerUltimoJobSimel();
+
+      if (!job) {
+        respuesta = "No hay jobs registrados.";
+      } else {
+        respuesta =
+          `Último job: ${job.jobId}\n` +
+          `Estado: ${job.estado}\n` +
+          `Empresas: ${job.totalEmpresas}\n` +
+          `Procesadas: ${job.procesadas}\n` +
+          `Sin manifiesto: ${job.sinManifiesto}\n` +
+          `Con error: ${job.conError}`;
+      }
+    } else if (/^simel errores$/i.test(text)) {
+      const job = await obtenerUltimoJobSimel();
+
+      if (!job) {
+        respuesta = "No hay jobs registrados.";
+      } else {
+        const items = await obtenerDetallesJobSimel(job.jobId);
+        const errores = items.filter((x) => x.estado === "ERROR");
+
+        if (!errores.length) {
+          respuesta = `El último job (${job.jobId}) no tiene errores.`;
+        } else {
+          const top = errores.slice(0, 5).map((e, i) =>
+            `${i + 1}. ${e.empresa} - ${(e.detalle || "ERROR").split("\n")[0]}`
+          );
+
+          respuesta =
+            `Errores en ${job.jobId}: ${errores.length}\n\n` +
+            top.join("\n");
+        }
+      }
+    }
+
+    await enviarWhatsAppTexto({
+      to: from,
+      body: respuesta,
+      contextMessageId: messageId
+    });
+
+    console.log("[WhatsApp] Respuesta enviada correctamente");
 
     return res.status(200).json({ ok: true });
   } catch (error) {
