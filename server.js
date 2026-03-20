@@ -6,7 +6,8 @@ const {
   actualizarResultadoSimel,
   crearJobSimel,
   buscarJobPendienteOEnProceso,
-  obtenerJobPorTexto
+  obtenerJobPorTexto,
+  obtenerDetallesJobSimel
 } = require("./airtable");
 const { iniciarWorker } = require("./worker");
 
@@ -153,6 +154,35 @@ app.post("/jobs/simel/start", async (req, res) => {
       mensaje: "Job creado correctamente",
       jobId: job.jobId,
       totalEmpresas: usuarios.length
+    });
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
+app.get("/jobs/simel/:jobId/detalle", async (req, res) => {
+  try {
+    const jobId = req.params.jobId;
+
+    const job = await obtenerJobPorTexto(jobId);
+
+    if (!job) {
+      return res.status(404).json({
+        ok: false,
+        error: "Job no encontrado"
+      });
+    }
+
+    const items = await obtenerDetallesJobSimel(jobId);
+
+    return res.status(200).json({
+      ok: true,
+      jobId,
+      total: items.length,
+      items
     });
   } catch (error) {
     return res.status(500).json({

@@ -189,7 +189,25 @@ async function obtenerJobPorTexto(jobId) {
     detalle: r.get("Detalle") || ""
   };
 }
+async function obtenerDetallesJobSimel(jobId) {
+  const records = await base(process.env.AIRTABLE_JOBS_DETAIL_TABLE)
+    .select({
+      filterByFormula: `{Job ID Texto}="${jobId}"`,
+      sort: [{ field: "Empresa", direction: "asc" }]
+    })
+    .all();
 
+  return records.map((r) => ({
+    airtableRecordId: r.id,
+    empresa: r.get("Empresa") || "",
+    usuario: r.get("Usuario") || "",
+    estado: r.get("Estado") || "",
+    filas: r.get("Filas") || 0,
+    detalle: r.get("Detalle") || "",
+    fecha: r.get("Fecha") || "",
+    jobIdTexto: r.get("Job ID Texto") || ""
+  }));
+}
 module.exports = {
   obtenerUsuariosSimelActivos,
   obtenerTodosLosUsuariosSimelPendientes,
@@ -199,5 +217,6 @@ module.exports = {
   buscarJobPendienteOEnProceso,
   actualizarJobSimel,
   crearDetalleJobSimel,
-  obtenerJobPorTexto
+  obtenerJobPorTexto,
+  obtenerDetallesJobSimel
 };
