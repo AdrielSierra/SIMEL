@@ -681,22 +681,22 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
-    if (comando.codigo === "SIMEL_START") {
-      if (!contacto.puedeEjecutarBatch) {
-        respuesta = "No tenés permiso para ejecutar batch.";
-      } else {
-        const resultadoStart = await crearJobDesdeBackend(`WhatsApp - ${contacto.nombre || contacto.telefono}`);
+if (comando.codigo === "SIMEL_START") {
+  if (!contacto.puedeEjecutarBatch) {
+    respuesta = "No tenés permiso para ejecutar batch.";
+  } else {
+    const resultadoStart = await crearJobDesdeBackend("WhatsApp");
 
-        if (resultadoStart.ok) {
-          respuesta =
-            `Job creado correctamente.\n` +
-            `Job ID: ${resultadoStart.jobId}\n` +
-            `Empresas a procesar: ${resultadoStart.totalEmpresas}`;
-        } else {
-          respuesta = resultadoStart.mensaje || "No se pudo crear el job.";
-        }
-      }
+    if (resultadoStart.ok) {
+      respuesta =
+        `Job creado correctamente.\n` +
+        `Job ID: ${resultadoStart.jobId}\n` +
+        `Empresas a procesar: ${resultadoStart.totalEmpresas}`;
+    } else {
+      respuesta = resultadoStart.mensaje || "No se pudo crear el job.";
     }
+  }
+}
 
     if (comando.codigo === "MANIFIESTOS_PENDIENTES") {
       if (!contacto.puedeVerManifiestosPendientes) {
