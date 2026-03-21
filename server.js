@@ -17,6 +17,14 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+const mensajesProcesados = new Set();
+
+function limpiarMensajesProcesados() {
+  if (mensajesProcesados.size > 1000) {
+    mensajesProcesados.clear();
+  }
+}
+
 function armarResumenDetalle(items) {
   return {
     ok: items.filter((x) => x.estado === "OK").length,
@@ -364,11 +372,16 @@ app.get("/whatsapp/webhook", (req, res) => {
 
 app.post("/whatsapp/webhook", async (req, res) => {
   try {
-    console.log("[WhatsApp] Payload crudo:", JSON.stringify(req.body));
-
     const entry = req.body?.entry?.[0];
     const changes = entry?.changes?.[0];
     const value = changes?.value;
+
+    const status = value?.statuses?.[0];
+    if (status) {
+      console.log("[WhatsApp] Status recibido:", status.status, "-", status.recipient_id);
+      return res.status(200).json({ ok: true });
+    }
+
     const message = value?.messages?.[0];
 
     if (!message) {
@@ -376,9 +389,20 @@ app.post("/whatsapp/webhook", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
+    const messageId = message.id || "";
     const from = message.from || "";
     const type = message.type || "";
     const text = (message.text?.body || "").trim();
+
+    if (messageId && mensajesProcesados.has(messageId)) {
+      console.log("[WhatsApp] Mensaje duplicado ignorado:", messageId);
+      return res.status(200).json({ ok: true });
+    }
+
+    if (messageId) {
+      mensajesProcesados.add(messageId);
+      limpiarMensajesProcesados();
+    }
 
     console.log("[WhatsApp] Mensaje recibido");
     console.log("From:", from);
@@ -431,7 +455,6 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
-    console.log("[WhatsApp] From recibido:", from);
     console.log("[WhatsApp] Destino usado para enviar:", destinoWhatsapp);
 
     try {
