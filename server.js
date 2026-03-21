@@ -1,6 +1,7 @@
 const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
+
 const {
   obtenerUsuariosSimelActivos,
   actualizarResultadoSimel,
@@ -14,8 +15,14 @@ const {
   crearLogWhatsApp,
   obtenerMenuWhatsApp,
   obtenerConfigWhatsApp,
-  listarManifiestosPendientesActivos
+  listarManifiestosPendientesActivos,
+  listarEmpresasSimel,
+  listarPendientesPorEmpresa,
+  obtenerSesionWhatsApp,
+  guardarSesionWhatsApp,
+  cerrarSesionWhatsApp
 } = require("./airtable");
+
 const { iniciarWorker } = require("./worker");
 
 const app = express();
@@ -29,6 +36,100 @@ function limpiarMensajesProcesados() {
   if (mensajesProcesados.size > 1000) {
     mensajesProcesados.clear();
   }
+}
+
+function normalizarTextoBusqueda(valor = "") {
+  return String(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function distanciaLevenshtein(a = "", b = "") {
+  const matriz = Array.from({ length: b.length + 1 }, () => []);
+  for (let i = 0; i <= b.length; i++) matriz[i][0] = i;
+  for (let j = 0; j <= a.length; j++) matriz[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      const costo = a[j - 1] === b[i - 1] ? 0 : 1;
+      matriz[i][j] = Math.min(
+        matriz[i - 1][j] + 1,
+        matriz[i][j - 1] + 1,
+        matriz[i - 1][j - 1] + costo
+      );
+    }
+  }
+
+  return matriz[b.length][a.length];
+}
+
+function buscarEmpresasInteligente(empresas, termino) {
+  const t = normalizarTextoBusqueda(termino);
+
+  return empresas
+    .map((empresa) => {
+      const e = normalizarTextoBusqueda(empresa);
+      let score = 0;
+
+      if (e === t) {
+        score = 100;
+      } else if (e.startsWith(t)) {
+        score = 92;
+      } else if (e.includes(t)) {
+        score = 84;
+      } else {
+        const dist = distanciaLevenshtein(e, t);
+        const ratio = 1 - dist / Math.max(e.length, t.length, 1);
+        score = Math.round(ratio * 70);
+      }
+
+      return { empresa, score };
+    })
+    .filter((x) => x.score >= 45)
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.empresa.localeCompare(b.empresa, "es", { sensitivity: "base" })
+    )
+    .slice(0, 5);
+}
+
+function parsearJSONSeguro(texto, fallback = null) {
+  try {
+    return JSON.parse(texto || "");
+  } catch {
+    return fallback;
+  }
+}
+
+async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
+  const pendientes = await listarPendientesPorEmpresa(nombreEmpresa);
+
+  if (!pendientes.length) {
+    return `La empresa "${nombreEmpresa}" no tiene manifiestos pendientes de aprobación.`;
+  }
+
+  const total = pendientes.reduce(
+    (acc, item) => acc + Number(item.cantidadPendientes || 0),
+    0
+  );
+
+  const detalle = pendientes
+    .slice(0, 5)
+    .map((p, i) => {
+      const cantidad = p.cantidadPendientes || 0;
+      const job = p.jobIdTexto || "Sin job";
+      return `${i + 1}. ${p.empresa} - ${cantidad} pendiente(s) - ${job}`;
+    })
+    .join("\n");
+
+  return (
+    `La empresa "${nombreEmpresa}" SÍ tiene manifiestos pendientes.\n\n` +
+    `Total detectado: ${total}\n\n` +
+    `${detalle}`
+  );
 }
 
 function armarResumenDetalle(items) {
@@ -72,6 +173,10 @@ function detectarComando(texto = "") {
     return { codigo: "SIMEL_ERRORES" };
   }
 
+  if (/^(3)$/i.test(t)) {
+    return { codigo: "SIMEL_DETALLE" };
+  }
+
   const detalleMatch = t.match(/^simel detalle\s+(JOB-[A-Za-z0-9-]+)$/i);
   if (detalleMatch) {
     return { codigo: "SIMEL_DETALLE", jobId: detalleMatch[1] };
@@ -81,8 +186,20 @@ function detectarComando(texto = "") {
     return { codigo: "SIMEL_START" };
   }
 
-  if (/^(3|manifiestos pendientes|pendientes|pendientes aprobar)$/i.test(t)) {
+  if (/^(5|manifiestos pendientes|pendientes|pendientes aprobar)$/i.test(t)) {
     return { codigo: "MANIFIESTOS_PENDIENTES" };
+  }
+
+  if (/^(6)$/i.test(t)) {
+    return { codigo: "BUSCAR_EMPRESA_AYUDA" };
+  }
+
+  const buscarEmpresaMatch = t.match(/^(buscar empresa|empresa)\s+(.+)$/i);
+  if (buscarEmpresaMatch) {
+    return {
+      codigo: "BUSCAR_EMPRESA",
+      termino: buscarEmpresaMatch[2].trim()
+    };
   }
 
   return { codigo: "DESCONOCIDO" };
@@ -105,12 +222,21 @@ async function construirMenu(contacto) {
     return tienePermiso(contacto, item.permisoRequerido);
   });
 
+  const vistos = new Set();
+  items = items.filter((item) => {
+    const clave = `${item.comandoExacto || ""}__${item.titulo || ""}`;
+    if (vistos.has(clave)) return false;
+    vistos.add(clave);
+    return true;
+  });
+
   if (!items.length) {
     items = [
       { titulo: "Estado del último job", comandoExacto: "simel estado" },
       { titulo: "Errores del último job", comandoExacto: "simel errores" },
-      { titulo: "Manifiestos pendientes", comandoExacto: "manifiestos pendientes" },
-      { titulo: "Ejecutar batch SIMEL", comandoExacto: "simel start" }
+      { titulo: "Detalle de un job", comandoExacto: "simel detalle JOB-..." },
+      { titulo: "Ejecutar batch SIMEL", comandoExacto: "simel start" },
+      { titulo: "Manifiestos pendientes", comandoExacto: "manifiestos pendientes" }
     ];
   }
 
@@ -118,6 +244,10 @@ async function construirMenu(contacto) {
     const comando = item.comandoExacto ? ` → ${item.comandoExacto}` : "";
     return `${index + 1}. ${item.titulo}${comando}`;
   });
+
+  if (contacto?.rol === "Admin") {
+    lineas.push(`${lineas.length + 1}. Buscar empresa → buscar empresa NOMBRE`);
+  }
 
   return `${bienvenida}\n\n${lineas.join("\n")}`;
 }
@@ -156,7 +286,9 @@ async function enviarWhatsAppTexto({ to, body }) {
   console.log("[WhatsApp] Respuesta Graph:", JSON.stringify(data));
 
   if (!response.ok) {
-    throw new Error(`WhatsApp API error: ${response.status} - ${JSON.stringify(data)}`);
+    throw new Error(
+      `WhatsApp API error: ${response.status} - ${JSON.stringify(data)}`
+    );
   }
 
   return data;
@@ -180,7 +312,8 @@ async function crearJobDesdeBackend(disparadoPor = "Manual") {
     return {
       ok: false,
       sinPendientes: true,
-      mensaje: "No hay empresas pendientes para procesar"
+      mensaje:
+        "No hay empresas pendientes para procesar.\n\nPara ejecutar un batch desde WhatsApp, marcá 'Ejecutar batch' = true en uno o más registros de Usuarios_SIMEL."
     };
   }
 
@@ -218,12 +351,12 @@ app.get("/check", async (req, res) => {
     if (!user || !pass) {
       return res.status(400).json({
         ok: false,
-        error: "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
+        error:
+          "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
       });
     }
 
     const resultado = await checkSimel(user, pass);
-
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
@@ -308,7 +441,6 @@ app.post("/jobs/simel/start", async (req, res) => {
     }
 
     const resultado = await crearJobDesdeBackend("Manual");
-
     return res.status(200).json(resultado);
   } catch (error) {
     return res.status(500).json({
@@ -510,12 +642,37 @@ app.post("/whatsapp/webhook", async (req, res) => {
       limpiarMensajesProcesados();
     }
 
+    const sesionActiva = await obtenerSesionWhatsApp(from);
+
     console.log("[WhatsApp] Mensaje recibido");
     console.log("From:", from);
     console.log("Type:", type);
     console.log("Text:", text);
 
-    const comando = detectarComando(text);
+    let comando = detectarComando(text);
+
+    if (
+      sesionActiva &&
+      sesionActiva.estadoSesion === "Esperando empresa" &&
+      /^\d+$/.test(text.trim())
+    ) {
+      const dataSesion = parsearJSONSeguro(sesionActiva.observaciones, { candidatos: [] });
+      const candidatos = Array.isArray(dataSesion?.candidatos) ? dataSesion.candidatos : [];
+      const indice = Number(text.trim()) - 1;
+
+      if (candidatos[indice]) {
+        comando = {
+          codigo: "SELECCION_EMPRESA",
+          empresa: candidatos[indice]
+        };
+      } else {
+        comando = {
+          codigo: "SELECCION_EMPRESA_INVALIDA",
+          candidatos
+        };
+      }
+    }
+
     const contacto = await buscarAutorizadoWhatsApp(from);
 
     await crearLogWhatsApp({
@@ -527,13 +684,14 @@ app.post("/whatsapp/webhook", async (req, res) => {
       messageIdMeta: messageId,
       payloadCrudoEntrada: payloadCrudo,
       textoRecibido: text,
-      comandoDetectado: comando.codigo,
+      comandoDetectado: ["BUSCAR_EMPRESA", "BUSCAR_EMPRESA_AYUDA", "SELECCION_EMPRESA", "SELECCION_EMPRESA_INVALIDA"].includes(comando.codigo)
+        ? "DESCONOCIDO"
+        : comando.codigo,
       estadoEjecucion: "OK"
     });
 
     if (!contacto || !contacto.activo) {
       const respuesta = "Tu número no está autorizado para usar este bot.";
-
       const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
       try {
@@ -654,6 +812,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
     if (comando.codigo === "SIMEL_DETALLE") {
       if (!contacto.puedeVerDetalleJob) {
         respuesta = "No tenés permiso para ver detalle de jobs.";
+      } else if (!comando.jobId) {
+        respuesta = "Para ver el detalle, escribí:\n\nsimel detalle JOB-XXXXXXXXXXXX";
       } else {
         const job = await obtenerJobPorTexto(comando.jobId);
 
@@ -681,22 +841,22 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
-if (comando.codigo === "SIMEL_START") {
-  if (!contacto.puedeEjecutarBatch) {
-    respuesta = "No tenés permiso para ejecutar batch.";
-  } else {
-    const resultadoStart = await crearJobDesdeBackend("WhatsApp");
+    if (comando.codigo === "SIMEL_START") {
+      if (!contacto.puedeEjecutarBatch) {
+        respuesta = "No tenés permiso para ejecutar batch.";
+      } else {
+        const resultadoStart = await crearJobDesdeBackend("WhatsApp");
 
-    if (resultadoStart.ok) {
-      respuesta =
-        `Job creado correctamente.\n` +
-        `Job ID: ${resultadoStart.jobId}\n` +
-        `Empresas a procesar: ${resultadoStart.totalEmpresas}`;
-    } else {
-      respuesta = resultadoStart.mensaje || "No se pudo crear el job.";
+        if (resultadoStart.ok) {
+          respuesta =
+            `Job creado correctamente.\n` +
+            `Job ID: ${resultadoStart.jobId}\n` +
+            `Empresas a procesar: ${resultadoStart.totalEmpresas}`;
+        } else {
+          respuesta = resultadoStart.mensaje || "No se pudo crear el job.";
+        }
+      }
     }
-  }
-}
 
     if (comando.codigo === "MANIFIESTOS_PENDIENTES") {
       if (!contacto.puedeVerManifiestosPendientes) {
@@ -717,6 +877,77 @@ if (comando.codigo === "SIMEL_START") {
             `Empresas con manifiestos pendientes:\n\n` +
             lineas.join("\n");
         }
+      }
+    }
+
+    if (comando.codigo === "BUSCAR_EMPRESA_AYUDA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+      } else {
+        respuesta =
+          "Para buscar una empresa, escribí por ejemplo:\n\n" +
+          "buscar empresa petrolfe";
+      }
+    }
+
+    if (comando.codigo === "BUSCAR_EMPRESA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+      } else {
+        const empresas = await listarEmpresasSimel({ soloActivas: true });
+        const coincidencias = buscarEmpresasInteligente(empresas, comando.termino);
+
+        if (!coincidencias.length) {
+          respuesta =
+            `No encontré coincidencias para "${comando.termino}".\n\n` +
+            `Probá escribiendo por ejemplo:\n` +
+            `buscar empresa roal`;
+          await cerrarSesionWhatsApp(from);
+        } else if (coincidencias.length === 1 || coincidencias[0].score >= 92) {
+          await cerrarSesionWhatsApp(from);
+          respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
+        } else {
+          const candidatos = coincidencias.map((x) => x.empresa);
+
+          await guardarSesionWhatsApp({
+            telefono: from,
+            contactoAutorizadoRecordId: contacto.airtableRecordId,
+            ultimoMensaje: text,
+            ultimoComando: "BUSCAR_EMPRESA",
+            estadoSesion: "Esperando empresa",
+            empresaEnContexto: "",
+            observaciones: JSON.stringify({
+              termino: comando.termino,
+              candidatos
+            })
+          });
+
+          respuesta =
+            `Encontré estas empresas parecidas a "${comando.termino}":\n\n` +
+            candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+            `\n\nRespondé solo con el número de la empresa que querés consultar.`;
+        }
+      }
+    }
+
+    if (comando.codigo === "SELECCION_EMPRESA_INVALIDA") {
+      if (!comando.candidatos?.length) {
+        respuesta = "No encontré una búsqueda activa. Escribí: buscar empresa NOMBRE";
+      } else {
+        respuesta =
+          `La opción elegida no es válida.\n\n` +
+          comando.candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+          `\n\nRespondé solo con un número de la lista.`;
+      }
+    }
+
+    if (comando.codigo === "SELECCION_EMPRESA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+        await cerrarSesionWhatsApp(from);
+      } else {
+        respuesta = await construirRespuestaPendientesEmpresa(comando.empresa);
+        await cerrarSesionWhatsApp(from);
       }
     }
 

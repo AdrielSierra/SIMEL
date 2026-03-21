@@ -12,7 +12,8 @@ const TABLAS = {
   whatsappLog: process.env.AIRTABLE_WHATSAPP_LOG_TABLE || "WhatsApp_Log",
   whatsappMenu: process.env.AIRTABLE_WHATSAPP_MENU_TABLE || "WhatsApp_Menu",
   simelPendientes: process.env.AIRTABLE_SIMEL_PENDING_TABLE || "SIMEL_Manifiestos_Pendientes",
-  whatsappConfig: process.env.AIRTABLE_WHATSAPP_CONFIG_TABLE || "WhatsApp_Configuracion"
+  whatsappConfig: process.env.AIRTABLE_WHATSAPP_CONFIG_TABLE || "WhatsApp_Configuracion",
+  whatsappSesiones: process.env.AIRTABLE_WHATSAPP_SESSIONS_TABLE || "WhatsApp_Sesiones"
 };
 
 function escaparFormula(valor = "") {
@@ -21,8 +22,12 @@ function escaparFormula(valor = "") {
     .replace(/"/g, '\\"');
 }
 
-function normalizarTelefono(valor = "") {
-  return String(valor).replace(/\D/g, "");
+function normalizarTexto(valor = "") {
+  return String(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
 }
 
 function textoDesdeLookup(valor) {
@@ -468,6 +473,145 @@ async function listarManifiestosPendientesActivos({ limit = 10 } = {}) {
   }));
 }
 
+async function listarEmpresasSimel({ soloActivas = true } = {}) {
+  const records = await base(TABLAS.usuariosSimel)
+    .select({
+      fields: ["Empresa", "Activo"],
+      sort: [{ field: "Empresa", direction: "asc" }]
+    })
+    .all();
+
+  const unicas = new Set();
+
+  for (const r of records) {
+    const empresa = (r.get("Empresa") || "").trim();
+    const activo = !!r.get("Activo");
+
+    if (!empresa) continue;
+    if (soloActivas && !activo) continue;
+
+    unicas.add(empresa);
+  }
+
+  return Array.from(unicas).sort((a, b) =>
+    a.localeCompare(b, "es", { sensitivity: "base" })
+  );
+}
+
+async function listarPendientesPorEmpresa(nombreEmpresa) {
+  const formula = `AND({Activo}=1,OR({Estado pendiente}="Pendiente de revisión",{Estado pendiente}="Pendiente de aprobación",{Estado pendiente}="Aprobación solicitada"))`;
+
+  const records = await base(TABLAS.simelPendientes)
+    .select({
+      filterByFormula: formula,
+      sort: [{ field: "Fecha detección", direction: "desc" }]
+    })
+    .all();
+
+  const empresaNormalizada = normalizarTexto(nombreEmpresa);
+
+  return records
+    .map((r) => ({
+      airtableRecordId: r.id,
+      idPendiente: r.get("ID Pendiente") || "",
+      jobIdTexto: r.get("Job ID Texto") || "",
+      empresa: textoDesdeLookup(r.get("Empresa")),
+      usuarioSimel: textoDesdeLookup(r.get("Usuario SIMEL")),
+      cantidadPendientes: Number(r.get("Cantidad pendientes") || 0),
+      estadoPendiente: r.get("Estado pendiente") || "",
+      detalleResumido: r.get("Detalle resumido") || "",
+      detalleTecnico: r.get("Detalle técnico") || ""
+    }))
+    .filter((p) => normalizarTexto(p.empresa) === empresaNormalizada);
+}
+
+async function buscarSesionWhatsAppRecord(telefono) {
+  const telefonoNormalizado = normalizarTelefono(telefono);
+
+  const records = await base(TABLAS.whatsappSesiones)
+    .select({
+      filterByFormula: `{Teléfono}="${escaparFormula(telefonoNormalizado)}"`,
+      maxRecords: 1,
+      sort: [{ field: "Última actualización", direction: "desc" }]
+    })
+    .all();
+
+  return records[0] || null;
+}
+
+async function obtenerSesionWhatsApp(telefono) {
+  const r = await buscarSesionWhatsAppRecord(telefono);
+  if (!r) return null;
+
+  return {
+    airtableRecordId: r.id,
+    telefono: r.get("Teléfono") || "",
+    ultimoMensaje: r.get("Último mensaje") || "",
+    ultimoComando: r.get("Último comando") || "",
+    estadoSesion: r.get("Estado sesión") || "",
+    jobIdEnContexto: r.get("Job ID en contexto") || "",
+    empresaEnContexto: r.get("Empresa en contexto") || "",
+    observaciones: r.get("Observaciones") || ""
+  };
+}
+
+async function guardarSesionWhatsApp({
+  telefono,
+  contactoAutorizadoRecordId = null,
+  ultimoMensaje = "",
+  ultimoComando = "",
+  estadoSesion = "Activa",
+  jobIdEnContexto = "",
+  empresaEnContexto = "",
+  observaciones = ""
+}) {
+  const telefonoNormalizado = normalizarTelefono(telefono);
+  const existente = await buscarSesionWhatsAppRecord(telefonoNormalizado);
+
+  const fields = limpiarCampos({
+    "Teléfono": telefonoNormalizado,
+    "Contacto autorizado": contactoAutorizadoRecordId ? [contactoAutorizadoRecordId] : undefined,
+    "Último mensaje": ultimoMensaje,
+    "Último comando": ultimoComando,
+    "Estado sesión": estadoSesion,
+    "Job ID en contexto": jobIdEnContexto,
+    "Empresa en contexto": empresaEnContexto,
+    "Expira en": new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    "Observaciones": observaciones
+  });
+
+  if (existente) {
+    await base(TABLAS.whatsappSesiones).update([
+      {
+        id: existente.id,
+        fields
+      }
+    ]);
+
+    return existente.id;
+  }
+
+  const created = await base(TABLAS.whatsappSesiones).create([{ fields }]);
+  return created[0].id;
+}
+
+async function cerrarSesionWhatsApp(telefono) {
+  const existente = await buscarSesionWhatsAppRecord(telefono);
+  if (!existente) return;
+
+  await base(TABLAS.whatsappSesiones).update([
+    {
+      id: existente.id,
+      fields: {
+        "Estado sesión": "Cerrada",
+        "Job ID en contexto": "",
+        "Empresa en contexto": "",
+        "Observaciones": ""
+      }
+    }
+  ]);
+}
+
 module.exports = {
   obtenerUsuariosSimelActivos,
   obtenerTodosLosUsuariosSimelPendientes,
@@ -486,5 +630,10 @@ module.exports = {
   obtenerMenuWhatsApp,
   obtenerConfigWhatsApp,
   registrarManifiestoPendienteSimel,
-  listarManifiestosPendientesActivos
+  listarManifiestosPendientesActivos,
+  listarEmpresasSimel,
+  listarPendientesPorEmpresa,
+  obtenerSesionWhatsApp,
+  guardarSesionWhatsApp,
+  cerrarSesionWhatsApp
 };
