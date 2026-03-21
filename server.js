@@ -429,21 +429,26 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
-    await enviarWhatsAppTexto({
-      to: from,
-      body: respuesta
-    });
+    const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
-    console.log("[WhatsApp] Respuesta enviada correctamente");
+    console.log("[WhatsApp] From recibido:", from);
+    console.log("[WhatsApp] Destino usado para enviar:", destinoWhatsapp);
+
+    try {
+      await enviarWhatsAppTexto({
+        to: destinoWhatsapp,
+        body: respuesta
+      });
+
+      console.log("[WhatsApp] Respuesta enviada correctamente");
+    } catch (sendError) {
+      console.error("[WhatsApp] Error enviando respuesta:", sendError.message);
+    }
 
     return res.status(200).json({ ok: true });
   } catch (error) {
     console.error("[WhatsApp] Error en webhook:", error.message);
-
-    return res.status(500).json({
-      ok: false,
-      error: error.message
-    });
+    return res.status(200).json({ ok: true });
   }
 });
 
