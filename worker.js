@@ -4,7 +4,8 @@ const {
   actualizarResultadoSimel,
   buscarJobPendiente,
   actualizarJobSimel,
-  crearDetalleJobSimel
+  crearDetalleJobSimel,
+  registrarManifiestoPendienteSimel
 } = require("./airtable");
 
 let trabajando = false;
@@ -17,6 +18,7 @@ async function procesarJobPendiente() {
 
   try {
     job = await buscarJobPendiente();
+
     if (!job) {
       trabajando = false;
       return;
@@ -52,6 +54,14 @@ async function procesarJobPendiente() {
           jobIdTexto: job.jobId,
           resultado
         });
+
+        if (resultado.estado === "CON_MANIFIESTO") {
+          await registrarManifiestoPendienteSimel({
+            jobRecordId: job.airtableRecordId,
+            jobIdTexto: job.jobId,
+            resultado
+          });
+        }
 
         procesadas++;
 
