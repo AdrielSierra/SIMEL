@@ -120,12 +120,15 @@ async function checkSimelInterno(user, pass) {
 
 async function checkSimel(user, pass) {
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout: SIMEL no respondió en 45 segundos")), 45000)
+    setTimeout(
+      () => reject(new Error("Timeout: SIMEL no respondió en 45 segundos")),
+      45000
+    )
   );
 
   return Promise.race([checkSimelInterno(user, pass), timeout]).catch(err => ({
     ok: false,
-    usuario: user,
+    usuario: user || "",
     hayManifiesto: false,
     filas: 0,
     estado: "ERROR",
