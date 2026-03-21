@@ -547,12 +547,18 @@ async function obtenerSesionWhatsApp(telefono) {
   const r = await buscarSesionWhatsAppRecord(telefono);
   if (!r) return null;
 
+  const estadoSesion = r.get("Estado sesión") || "";
+  if (estadoSesion === "Cerrada") return null;
+
+  const expiraEn = r.get("Expira en");
+  if (expiraEn && new Date(expiraEn) < new Date()) return null;
+
   return {
     airtableRecordId: r.id,
     telefono: r.get("Teléfono") || "",
     ultimoMensaje: r.get("Último mensaje") || "",
     ultimoComando: r.get("Último comando") || "",
-    estadoSesion: r.get("Estado sesión") || "",
+    estadoSesion,
     jobIdEnContexto: r.get("Job ID en contexto") || "",
     empresaEnContexto: r.get("Empresa en contexto") || "",
     observaciones: r.get("Observaciones") || ""

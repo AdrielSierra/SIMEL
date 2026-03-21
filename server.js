@@ -108,7 +108,7 @@ async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
   const pendientes = await listarPendientesPorEmpresa(nombreEmpresa);
 
   if (!pendientes.length) {
-    return `La empresa "${nombreEmpresa}" no tiene manifiestos pendientes de aprobación.`;
+    return `✅ *${nombreEmpresa}*\n\nNo tiene manifiestos pendientes de aprobación.`;
   }
 
   const total = pendientes.reduce(
@@ -121,13 +121,14 @@ async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
     .map((p, i) => {
       const cantidad = p.cantidadPendientes || 0;
       const job = p.jobIdTexto || "Sin job";
-      return `${i + 1}. ${p.empresa} - ${cantidad} pendiente(s) - ${job}`;
+      return `${i + 1}. ${cantidad} pendiente(s) — ${job}`;
     })
     .join("\n");
 
   return (
-    `La empresa "${nombreEmpresa}" SÍ tiene manifiestos pendientes.\n\n` +
-    `Total detectado: ${total}\n\n` +
+    `⚠️ *${nombreEmpresa}*\n\n` +
+    `Tiene manifiestos pendientes de aprobación.\n` +
+    `Total: *${total}*\n\n` +
     `${detalle}`
   );
 }
@@ -903,10 +904,13 @@ app.post("/whatsapp/webhook", async (req, res) => {
         });
 
         respuesta =
-          "Para buscar una empresa, escribí por ejemplo:\n\n" +
-          "petrolfe\n\n" +
-          "o también:\n" +
-          "buscar empresa petrolfe";
+          "🔍 *Búsqueda de empresa*\n\n" +
+          "Escribí el nombre (o parte del nombre) de la empresa.\n\n" +
+          "Ejemplos:\n" +
+          "• petrolfe\n" +
+          "• roal\n" +
+          "• ypf\n\n" +
+          "Escribí *menu* para cancelar.";
       }
     }
 
@@ -928,16 +932,18 @@ app.post("/whatsapp/webhook", async (req, res) => {
           });
 
           respuesta =
-            "Decime el nombre de la empresa que querés buscar.\n\n" +
+            "🔍 *Búsqueda de empresa*\n\n" +
+            "Escribí el nombre de la empresa que querés buscar.\n\n" +
             "Ejemplos:\n" +
-            "- petrolfe\n" +
-            "- roal\n" +
-            "- ypf";
+            "• petrolfe\n" +
+            "• roal\n" +
+            "• ypf";
         } else {
           const empresas = await listarEmpresasSimel({ soloActivas: true });
           const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
           if (!coincidencias.length) {
+            // Mantener sesión activa para que pueda seguir buscando
             await guardarSesionWhatsApp({
               telefono: from,
               contactoAutorizadoRecordId: contacto.airtableRecordId,
@@ -945,19 +951,19 @@ app.post("/whatsapp/webhook", async (req, res) => {
               ultimoComando: "BUSCAR_EMPRESA",
               estadoSesion: "Esperando empresa",
               empresaEnContexto: "",
-              observaciones: JSON.stringify({ candidatos: [] })
+              observaciones: JSON.stringify({ candidatos: [], ultimaBusqueda: termino })
             });
 
             respuesta =
-              `No encontré coincidencias para "${termino}".\n\n` +
-              "Probá escribiendo otro nombre o una parte del nombre.\n" +
-              "Por ejemplo:\n" +
-              "- petrolfe\n" +
-              "- roal\n" +
-              "- ypf";
-          } else if (coincidencias.length === 1 || coincidencias[0].score >= 92) {
+              `❌ No encontré empresas parecidas a "${termino}".\n\n` +
+              "Probá con otro nombre o una parte del nombre.\n" +
+              "Escribí *menu* para salir.";
+
+          } else if (coincidencias[0].score === 100 || (coincidencias.length === 1 && coincidencias[0].score >= 84)) {
+            // Coincidencia muy fuerte o única → responder directo
             await cerrarSesionWhatsApp(from);
             respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
+
           } else {
             const candidatos = coincidencias.map((x) => x.empresa);
 
@@ -968,17 +974,15 @@ app.post("/whatsapp/webhook", async (req, res) => {
               ultimoComando: "BUSCAR_EMPRESA",
               estadoSesion: "Esperando empresa",
               empresaEnContexto: "",
-              observaciones: JSON.stringify({
-                termino,
-                candidatos
-              })
+              observaciones: JSON.stringify({ termino, candidatos })
             });
 
             respuesta =
-              `Encontré estas empresas parecidas a "${termino}":\n\n` +
+              `🔍 Encontré ${candidatos.length} empresa(s) parecida(s) a "${termino}":\n\n` +
               candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-              "\n\nRespondé solo con el número de la empresa que querés consultar.\n" +
-              "O escribí otro nombre para volver a buscar.";
+              "\n\n✏️ Respondé con el *número* de la empresa.\n" +
+              "O escribí otro nombre para buscar de nuevo.\n" +
+              "Escribí *menu* para salir.";
           }
         }
       }
@@ -992,10 +996,10 @@ app.post("/whatsapp/webhook", async (req, res) => {
           "buscar empresa NOMBRE";
       } else {
         respuesta =
-          "La opción elegida no es válida.\n\n" +
+          "⚠️ Número inválido. Las opciones son:\n\n" +
           comando.candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-          "\n\nRespondé solo con un número de la lista.\n" +
-          "O escribí otro nombre para volver a buscar.";
+          "\n\nRespondé con un número de la lista.\n" +
+          "O escribí otro nombre para buscar de nuevo.";
       }
     }
 
@@ -1004,8 +1008,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
         respuesta = "Esta opción está disponible solo para administradores.";
         await cerrarSesionWhatsApp(from);
       } else {
-        respuesta = await construirRespuestaPendientesEmpresa(comando.empresa);
         await cerrarSesionWhatsApp(from);
+        respuesta = await construirRespuestaPendientesEmpresa(comando.empresa);
       }
     }
 
