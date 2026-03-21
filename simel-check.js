@@ -1,31 +1,34 @@
 const { chromium } = require('playwright');
 
-async function checkSimel(user, pass) {
-async function abrirPendientes(page) {
-  const intentos = [
-    page.getByRole('link', { name: /pendientes/i }).first(),
-    page.getByRole('button', { name: /pendientes/i }).first(),
-    page.locator('a, button, span, div').filter({ hasText: /^Pendientes$/i }).first(),
-    page.getByText(/^Pendientes$/i).first()
-  ];
+// === MEJORA 4: TIMEOUT EN checkSimel ===
 
-  let ultimoError = null;
+async function checkSimelInterno(user, pass) {
+  async function abrirPendientes(page) {
+    const intentos = [
+      page.getByRole('link', { name: /pendientes/i }).first(),
+      page.getByRole('button', { name: /pendientes/i }).first(),
+      page.locator('a, button, span, div').filter({ hasText: /^Pendientes$/i }).first(),
+      page.getByText(/^Pendientes$/i).first()
+    ];
 
-  for (const locator of intentos) {
-    try {
-      await locator.waitFor({ state: 'visible', timeout: 15000 });
-      await locator.click({ timeout: 15000 });
-      await page.getByText(/MANIFIESTOS PENDIENTES/i).waitFor({ timeout: 30000 });
-      return;
-    } catch (error) {
-      ultimoError = error;
+    let ultimoError = null;
+
+    for (const locator of intentos) {
+      try {
+        await locator.waitFor({ state: 'visible', timeout: 15000 });
+        await locator.click({ timeout: 15000 });
+        await page.getByText(/MANIFIESTOS PENDIENTES/i).waitFor({ timeout: 30000 });
+        return;
+      } catch (error) {
+        ultimoError = error;
+      }
     }
+
+    throw new Error(
+      `No se pudo abrir la sección Pendientes.${ultimoError ? ' ' + ultimoError.message : ''}`
+    );
   }
 
-  throw new Error(
-    `No se pudo abrir la sección Pendientes.${ultimoError ? ' ' + ultimoError.message : ''}`
-  );
-}
   if (!user || !pass) {
     return {
       ok: false,
@@ -50,21 +53,20 @@ async function abrirPendientes(page) {
       timeout: 60000,
     });
 
-   await page.locator('input').nth(0).fill(user);
-await page.locator('input').nth(1).fill(pass);
-await page.getByRole('button', { name: /ingresar/i }).click();
+    await page.locator('input').nth(0).fill(user);
+    await page.locator('input').nth(1).fill(pass);
+    await page.getByRole('button', { name: /ingresar/i }).click();
 
-await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
-await page.waitForTimeout(2000);
+    await page.waitForLoadState('domcontentloaded', { timeout: 60000 });
+    await page.waitForTimeout(2000);
 
-await abrirPendientes(page);
+    await abrirPendientes(page);
 
-const sinResultados = await page
-  .getByText(/No se han encontrado resultados\./i)
-  .isVisible()
-  .catch(() => false);
+    const sinResultados = await page
+      .getByText(/No se han encontrado resultados\./i)
+      .isVisible()
+      .catch(() => false);
 
-  
     let hayManifiesto = false;
     let filas = 0;
     let estado = 'SIN_MANIFIESTO';
@@ -114,6 +116,22 @@ const sinResultados = await page
   } finally {
     await browser.close();
   }
+}
+
+async function checkSimel(user, pass) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error("Timeout: SIMEL no respondió en 45 segundos")), 45000)
+  );
+
+  return Promise.race([checkSimelInterno(user, pass), timeout]).catch(err => ({
+    ok: false,
+    usuario: user,
+    hayManifiesto: false,
+    filas: 0,
+    estado: "ERROR",
+    detalle: err.message,
+    error: err.message
+  }));
 }
 
 module.exports = { checkSimel };

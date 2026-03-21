@@ -20,7 +20,13 @@ const {
   listarPendientesPorEmpresa,
   obtenerSesionWhatsApp,
   guardarSesionWhatsApp,
-  cerrarSesionWhatsApp
+  cerrarSesionWhatsApp,
+  crearAprobacionSimel,
+  buscarAprobacionPorToken,
+  actualizarEstadoAprobacion,
+  marcarEmpresasParaReintentar,
+  obtenerDatosEmpresaSimel,
+  obtenerHistorialAprobacionesEmpresa
 } = require("./airtable");
 
 const { iniciarWorker } = require("./worker");
@@ -37,6 +43,37 @@ function limpiarMensajesProcesados() {
     mensajesProcesados.clear();
   }
 }
+
+// === MEJORA 3: RATE LIMITING POR NÚMERO ===
+
+const contadorMensajes = new Map();
+
+function verificarRateLimit(telefono) {
+  const ahora = Date.now();
+  const ventana = 60 * 1000; // 1 minuto
+  const limite = 15; // máximo 15 mensajes por minuto
+
+  if (!contadorMensajes.has(telefono)) {
+    contadorMensajes.set(telefono, []);
+  }
+
+  const timestamps = contadorMensajes.get(telefono).filter(t => ahora - t < ventana);
+  timestamps.push(ahora);
+  contadorMensajes.set(telefono, timestamps);
+
+  return timestamps.length <= limite;
+}
+
+// Limpiar contadores cada 5 minutos
+setInterval(() => {
+  const ahora = Date.now();
+  const ventana = 60 * 1000;
+  for (const [tel, timestamps] of contadorMensajes.entries()) {
+    const activos = timestamps.filter(t => ahora - t < ventana);
+    if (activos.length === 0) contadorMensajes.delete(tel);
+    else contadorMensajes.set(tel, activos);
+  }
+}, 5 * 60 * 1000);
 
 function normalizarTextoBusqueda(valor = "") {
   return String(valor)
@@ -159,6 +196,17 @@ function tienePermiso(contacto, permisoRequerido = "") {
   return !!mapa[permisoRequerido];
 }
 
+// === MEJORA 1: GENERADOR DE TOKENS ===
+
+function generarTokenAprobacion() {
+  const caracteres = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let token = "";
+  for (let i = 0; i < 6; i++) {
+    token += caracteres.charAt(Math.floor(Math.random() * caracteres.length));
+  }
+  return token;
+}
+
 function detectarComando(texto = "") {
   const t = texto.trim();
 
@@ -201,6 +249,36 @@ function detectarComando(texto = "") {
       codigo: "BUSCAR_EMPRESA",
       termino: buscarEmpresaMatch[2].trim()
     };
+  }
+
+  // === MEJORA 1: NUEVOS COMANDOS DE APROBACIÓN ===
+
+  const aprobarMatch = t.match(/^(aprobar empresa|aprobar)\s+(.+)$/i);
+  if (aprobarMatch) {
+    return { codigo: "SOLICITAR_APROBACION", termino: aprobarMatch[2].trim() };
+  }
+
+  const confirmarMatch = t.match(/^confirmar\s+([A-Z0-9]{6})$/i);
+  if (confirmarMatch) {
+    return { codigo: "CONFIRMAR_APROBACION", token: confirmarMatch[1].toUpperCase() };
+  }
+
+  const historialMatch = t.match(/^(historial|historial empresa)\s+(.+)$/i);
+  if (historialMatch) {
+    return { codigo: "HISTORIAL_EMPRESA", termino: historialMatch[2].trim() };
+  }
+
+  if (/^(mi perfil|perfil|mis permisos)$/i.test(t)) {
+    return { codigo: "MI_PERFIL" };
+  }
+
+  if (/^reintentar errores$/i.test(t)) {
+    return { codigo: "REINTENTAR_ERRORES" };
+  }
+
+  const estadoEmpresaMatch = t.match(/^(estado empresa|empresa estado)\s+(.+)$/i);
+  if (estadoEmpresaMatch) {
+    return { codigo: "ESTADO_EMPRESA", termino: estadoEmpresaMatch[2].trim() };
   }
 
   return { codigo: "DESCONOCIDO" };
@@ -639,6 +717,12 @@ app.post("/whatsapp/webhook", async (req, res) => {
     const type = message.type || "";
     const text = (message.text?.body || "").trim();
 
+    // === MEJORA 3: RATE LIMITING ===
+    if (!verificarRateLimit(from)) {
+      console.log("[WhatsApp] Rate limit excedido para:", from);
+      return res.status(200).json({ ok: true });
+    }
+
     if (messageId && mensajesProcesados.has(messageId)) {
       console.log("[WhatsApp] Mensaje duplicado ignorado:", messageId);
       return res.status(200).json({ ok: true });
@@ -1019,6 +1103,232 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
+    // === MEJORA 1: MANEJO DE NUEVOS COMANDOS DE APROBACIÓN ===
+
+    if (comando.codigo === "SOLICITAR_APROBACION") {
+      if (!contacto.puedeSolicitarAprobacion) {
+        respuesta = "No tenés permiso para solicitar aprobaciones.";
+      } else {
+        const termino = (comando.termino || "").trim();
+        const empresas = await listarEmpresasSimel({ soloActivas: true });
+        const coincidencias = buscarEmpresasInteligente(empresas, termino);
+
+        if (!coincidencias.length) {
+          respuesta = `No encontré la empresa "${termino}". Verificá el nombre.`;
+        } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
+          // Múltiples opciones
+          const candidatos = coincidencias.map((x) => x.empresa);
+
+          await guardarSesionWhatsApp({
+            telefono: from,
+            contactoAutorizadoRecordId: contacto.airtableRecordId,
+            ultimoMensaje: text,
+            ultimoComando: "SOLICITAR_APROBACION",
+            estadoSesion: "Esperando empresa",
+            empresaEnContexto: "",
+            observaciones: JSON.stringify({ termino, candidatos })
+          });
+
+          respuesta =
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+            "\n\nPara aprobar manifiestos de una empresa, escribí:\n" +
+            "aprobar empresa NOMBRE EXACTO";
+        } else {
+          // Una sola opción o coincidencia perfecta
+          const empresa = coincidencias[0].empresa;
+          const pendientes = await listarPendientesPorEmpresa(empresa);
+
+          if (!pendientes.length) {
+            respuesta = `La empresa "${empresa}" no tiene manifiestos pendientes.`;
+          } else {
+            const cantidad = pendientes.reduce(
+              (acc, item) => acc + Number(item.cantidadPendientes || 0),
+              0
+            );
+            const token = generarTokenAprobacion();
+
+            await crearAprobacionSimel({
+              empresaNombre: empresa,
+              pendienteRecordId: pendientes[0]?.airtableRecordId || "",
+              solicitanteRecordId: contacto.airtableRecordId,
+              solicitanteTelefono: from,
+              solicitanteNombre: contacto.nombre,
+              cantidadPendientes: cantidad,
+              token
+            });
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "SOLICITAR_APROBACION",
+              estadoSesion: "Esperando confirmación aprobación",
+              empresaEnContexto: empresa,
+              observaciones: JSON.stringify({ token, empresa, cantidad })
+            });
+
+            respuesta =
+              `⚠️ *Solicitud de aprobación*\n\n` +
+              `Empresa: *${empresa}*\n` +
+              `Manifiestos a aprobar: ${cantidad}\n\n` +
+              `Tu código de confirmación es:\n` +
+              `*${token}*\n\n` +
+              `Escribí:\n` +
+              `confirmar ${token}\n\n` +
+              `para ejecutar la aprobación. Esta acción no se puede deshacer.`;
+          }
+        }
+      }
+    }
+
+    if (comando.codigo === "CONFIRMAR_APROBACION") {
+      if (!contacto.puedeConfirmarAprobacion) {
+        respuesta = "No tenés permiso para confirmar aprobaciones.";
+      } else {
+        const aprobacion = await buscarAprobacionPorToken(comando.token);
+
+        if (!aprobacion) {
+          respuesta = `El código "${comando.token}" no es válido o ya fue usado.`;
+        } else {
+          await actualizarEstadoAprobacion(aprobacion.airtableRecordId, {
+            estado: "Confirmada",
+            fechaEjecucion: new Date().toISOString()
+          });
+
+          respuesta =
+            `✅ Aprobación confirmada para *${aprobacion.empresa}*.\n\n` +
+            `La ejecución fue registrada y será procesada.\n\n` +
+            `ID de aprobación: ${aprobacion.airtableRecordId}`;
+
+          await cerrarSesionWhatsApp(from);
+        }
+      }
+    }
+
+    if (comando.codigo === "MI_PERFIL") {
+      const permisos = [
+        { nombre: "Ver menú", valor: contacto.puedeVerMenu },
+        { nombre: "Consultar estado", valor: contacto.puedeConsultarEstado },
+        { nombre: "Consultar errores", valor: contacto.puedeConsultarErrores },
+        { nombre: "Ver detalle job", valor: contacto.puedeVerDetalleJob },
+        { nombre: "Ejecutar batch", valor: contacto.puedeEjecutarBatch },
+        { nombre: "Ver manifiestos pendientes", valor: contacto.puedeVerManifiestosPendientes },
+        { nombre: "Solicitar aprobación", valor: contacto.puedeSolicitarAprobacion },
+        { nombre: "Confirmar aprobación", valor: contacto.puedeConfirmarAprobacion },
+        { nombre: "Aprobar manifiestos", valor: contacto.puedeAprobarManifiestos }
+      ];
+
+      const listaPermisos = permisos
+        .map((p) => `${p.valor ? "✅" : "❌"} ${p.nombre}`)
+        .join("\n");
+
+      respuesta =
+        `👤 *Tu perfil*\n\n` +
+        `Nombre: ${contacto.nombre}\n` +
+        `Rol: ${contacto.rol}\n\n` +
+        `*Permisos:*\n` +
+        `${listaPermisos}`;
+    }
+
+    if (comando.codigo === "REINTENTAR_ERRORES") {
+      if (!contacto.puedeEjecutarBatch) {
+        respuesta = "No tenés permiso para ejecutar batch.";
+      } else {
+        const job = await obtenerUltimoJobSimel();
+
+        if (!job) {
+          respuesta = "No hay jobs registrados.";
+        } else {
+          const items = await obtenerDetallesJobSimel(job.jobId);
+          const errores = items.filter((x) => x.estado === "ERROR");
+
+          if (!errores.length) {
+            respuesta = "El último job no tiene errores para reintentar.";
+          } else {
+            // Buscar recordIds de empresas con error
+            const recordIds = [];
+            for (const error of errores) {
+              const datosEmpresa = await obtenerDatosEmpresaSimel(error.empresa);
+              if (datosEmpresa.recordId) {
+                recordIds.push(datosEmpresa.recordId);
+              }
+            }
+
+            if (recordIds.length > 0) {
+              await marcarEmpresasParaReintentar(recordIds);
+            }
+
+            const resultadoStart = await crearJobDesdeBackend("Reintento WhatsApp");
+
+            respuesta =
+              `▶️ Reintento iniciado.\n\n` +
+              `${errores.length} empresa(s) con error del último job fueron marcadas para reprocesar.\n` +
+              `Job ID: ${resultadoStart.jobId}`;
+          }
+        }
+      }
+    }
+
+    if (comando.codigo === "ESTADO_EMPRESA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+      } else {
+        const termino = (comando.termino || "").trim();
+        const empresas = await listarEmpresasSimel({ soloActivas: true });
+        const coincidencias = buscarEmpresasInteligente(empresas, termino);
+
+        if (!coincidencias.length) {
+          respuesta = `No encontré la empresa "${termino}".`;
+        } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
+          // Múltiples opciones
+          const candidatos = coincidencias.map((x) => x.empresa);
+
+          respuesta =
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+            "\n\nEscribí el nombre exacto para ver el estado.";
+        } else {
+          // Una sola opción
+          const empresa = coincidencias[0].empresa;
+          const datos = await obtenerDatosEmpresaSimel(empresa);
+
+          const activa = datos.activo ? "✅" : "❌";
+
+          respuesta =
+            `🏢 *${datos.empresa}*\n\n` +
+            `Activa: ${activa}\n` +
+            `Último check: ${datos.ultimoCheck || "N/A"}\n` +
+            `Último estado: ${datos.ultimoEstado || "N/A"}\n` +
+            `Filas pendientes: ${datos.cantidadPendientes}\n\n` +
+            `Detalle: ${datos.ultimoDetalle || "N/A"}`;
+        }
+      }
+    }
+
+    if (comando.codigo === "HISTORIAL_EMPRESA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+      } else {
+        const termino = (comando.termino || "").trim();
+        const historial = await obtenerHistorialAprobacionesEmpresa(termino, 5);
+
+        if (!historial.length) {
+          respuesta = `No hay aprobaciones registradas para "${termino}".`;
+        } else {
+          const lineas = historial.map((h, i) => {
+            const fecha = h.fechaSolicitud ? h.fechaSolicitud.split("T")[0] : "N/A";
+            const ejecucion = h.fechaEjecucion ? h.fechaEjecucion.split("T")[0] : "Pendiente";
+            return `${i + 1}. ${fecha} - ${h.estado} - ${h.cantidadAprobar} aprobada(s) por ${h.solicitanteNombre} (Ejecución: ${ejecucion})`;
+          });
+
+          respuesta =
+            `📋 *Historial ${termino}*\n\n` +
+            lineas.join("\n");
+        }
+      }
+    }
+
     const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
     console.log("[WhatsApp] From recibido:", from);
@@ -1077,6 +1387,31 @@ app.post("/whatsapp/webhook", async (req, res) => {
 });
 
 iniciarWorker();
+
+// === MEJORA 5: SCHEDULING AUTOMÁTICO DEL BATCH ===
+
+function iniciarSchedulerDiario() {
+  console.log("[Scheduler] Iniciando scheduler diario de batch SIMEL...");
+
+  setInterval(async () => {
+    const ahora = new Date();
+    const horaUTC = ahora.getUTCHours();
+    const minutosUTC = ahora.getUTCMinutes();
+
+    // Ejecutar a las 11:00 UTC (8:00 AM Argentina UTC-3)
+    if (horaUTC === 11 && minutosUTC < 1) {
+      console.log("[Scheduler] Disparando batch automático diario...");
+      try {
+        const resultado = await crearJobDesdeBackend("Automático");
+        console.log("[Scheduler] Resultado:", resultado.mensaje);
+      } catch (err) {
+        console.error("[Scheduler] Error disparando batch automático:", err.message);
+      }
+    }
+  }, 60 * 1000); // revisar cada 1 minuto
+}
+
+iniciarSchedulerDiario();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);

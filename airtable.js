@@ -13,7 +13,8 @@ const TABLAS = {
   whatsappMenu: process.env.AIRTABLE_WHATSAPP_MENU_TABLE || "WhatsApp_Menu",
   simelPendientes: process.env.AIRTABLE_SIMEL_PENDING_TABLE || "SIMEL_Manifiestos_Pendientes",
   whatsappConfig: process.env.AIRTABLE_WHATSAPP_CONFIG_TABLE || "WhatsApp_Configuracion",
-  whatsappSesiones: process.env.AIRTABLE_WHATSAPP_SESSIONS_TABLE || "WhatsApp_Sesiones"
+  whatsappSesiones: process.env.AIRTABLE_WHATSAPP_SESSIONS_TABLE || "WhatsApp_Sesiones",
+  aprobaciones: process.env.AIRTABLE_SIMEL_APROBACIONES_TABLE || "SIMEL_Aprobaciones"
 };
 
 function escaparFormula(valor = "") {
@@ -622,6 +623,217 @@ async function cerrarSesionWhatsApp(telefono) {
   ]);
 }
 
+// === MEJORA 1: FUNCIONES DE APROBACIÓN ===
+
+async function crearAprobacionSimel({ empresaNombre, pendienteRecordId, solicitanteRecordId, solicitanteTelefono, solicitanteNombre, cantidadPendientes, token }) {
+  const fields = limpiarCampos({
+    "Empresa": empresaNombre || "",
+    "Pendiente relacionado": pendienteRecordId ? [pendienteRecordId] : undefined,
+    "Solicitante": solicitanteRecordId ? [solicitanteRecordId] : undefined,
+    "Teléfono solicitante": solicitanteTelefono || "",
+    "Nombre solicitante": solicitanteNombre || "",
+    "Cantidad a aprobar": Number(cantidadPendientes || 0),
+    "Token confirmación": token || "",
+    "Estado": "Pendiente confirmación",
+    "Fecha solicitud": new Date().toISOString()
+  });
+
+  try {
+    const created = await base(TABLAS.aprobaciones).create([{ fields }]);
+    return {
+      airtableRecordId: created[0].id,
+      token
+    };
+  } catch (error) {
+    console.error("[Airtable] Error creando aprobación:", error.message);
+    throw error;
+  }
+}
+
+async function buscarAprobacionPorToken(token) {
+  try {
+    const records = await base(TABLAS.aprobaciones)
+      .select({
+        filterByFormula: `AND({Token confirmación}="${escaparFormula(token)}",{Estado}="Pendiente confirmación")`,
+        maxRecords: 1
+      })
+      .all();
+
+    if (!records.length) return null;
+
+    const r = records[0];
+
+    return {
+      airtableRecordId: r.id,
+      empresa: r.get("Empresa") || "",
+      token: r.get("Token confirmación") || "",
+      estado: r.get("Estado") || "",
+      solicitanteTelefono: r.get("Teléfono solicitante") || "",
+      cantidadAprobar: Number(r.get("Cantidad a aprobar") || 0),
+      pendienteRecordId: r.get("Pendiente relacionado") || [],
+      fechaSolicitud: r.get("Fecha solicitud") || ""
+    };
+  } catch (error) {
+    console.error("[Airtable] Error buscando aprobación por token:", error.message);
+    return null;
+  }
+}
+
+async function actualizarEstadoAprobacion(airtableRecordId, { estado, fechaEjecucion, resultadoEjecucion, errorEjecucion }) {
+  const fields = limpiarCampos({
+    "Estado": estado,
+    "Fecha ejecución": fechaEjecucion,
+    "Resultado ejecución": resultadoEjecucion,
+    "Error ejecución": errorEjecucion
+  });
+
+  try {
+    await base(TABLAS.aprobaciones).update([
+      {
+        id: airtableRecordId,
+        fields
+      }
+    ]);
+  } catch (error) {
+    console.error("[Airtable] Error actualizando estado de aprobación:", error.message);
+  }
+}
+
+async function obtenerAprobacionesPendientesConfirmacion() {
+  try {
+    const records = await base(TABLAS.aprobaciones)
+      .select({
+        filterByFormula: `{Estado}="Pendiente confirmación"`,
+        sort: [{ field: "Fecha solicitud", direction: "desc" }]
+      })
+      .all();
+
+    return records.map((r) => ({
+      airtableRecordId: r.id,
+      empresa: r.get("Empresa") || "",
+      token: r.get("Token confirmación") || "",
+      solicitanteNombre: r.get("Nombre solicitante") || "",
+      cantidadAprobar: Number(r.get("Cantidad a aprobar") || 0),
+      fechaSolicitud: r.get("Fecha solicitud") || ""
+    }));
+  } catch (error) {
+    console.error("[Airtable] Error obteniendo aprobaciones pendientes:", error.message);
+    return [];
+  }
+}
+
+async function obtenerAdminsWhatsApp() {
+  try {
+    const records = await base(TABLAS.whatsappAutorizados)
+      .select({
+        filterByFormula: `AND({Activo}=1,{Rol}="Admin")`,
+        fields: ["Teléfono", "Teléfono normalizado", "Nombre"]
+      })
+      .all();
+
+    return records.map((r) => ({
+      airtableRecordId: r.id,
+      telefono: r.get("Teléfono") || "",
+      telefonoNormalizado: r.get("Teléfono normalizado") || "",
+      nombre: r.get("Nombre") || ""
+    }));
+  } catch (error) {
+    console.error("[Airtable] Error obteniendo admins WhatsApp:", error.message);
+    return [];
+  }
+}
+
+async function marcarEmpresasParaReintentar(recordIds) {
+  if (!recordIds || !recordIds.length) return;
+
+  try {
+    const updates = recordIds.map((id) => ({
+      id,
+      fields: {
+        "Ejecutar batch": true
+      }
+    }));
+
+    // Airtable permite máximo 10 updates por batch
+    for (let i = 0; i < updates.length; i += 10) {
+      const batch = updates.slice(i, i + 10);
+      await base(TABLAS.usuariosSimel).update(batch);
+    }
+  } catch (error) {
+    console.error("[Airtable] Error marcando empresas para reintentar:", error.message);
+  }
+}
+
+async function obtenerDatosEmpresaSimel(nombreEmpresa) {
+  try {
+    const records = await base(TABLAS.usuariosSimel)
+      .select({
+        filterByFormula: `{Empresa}="${escaparFormula(nombreEmpresa)}"`,
+        maxRecords: 1,
+        fields: ["Empresa", "Activo", "Último check", "Último estado", "Último detalle", "Cantidad filas pendientes"]
+      })
+      .all();
+
+    if (!records.length) {
+      return {
+        empresa: nombreEmpresa,
+        activo: false,
+        ultimoCheck: "",
+        ultimoEstado: "",
+        ultimoDetalle: "",
+        cantidadPendientes: 0
+      };
+    }
+
+    const r = records[0];
+
+    return {
+      recordId: r.id,
+      empresa: r.get("Empresa") || nombreEmpresa,
+      activo: !!r.get("Activo"),
+      ultimoCheck: r.get("Último check") || "",
+      ultimoEstado: r.get("Último estado") || "",
+      ultimoDetalle: r.get("Último detalle") || "",
+      cantidadPendientes: Number(r.get("Cantidad filas pendientes") || 0)
+    };
+  } catch (error) {
+    console.error("[Airtable] Error obteniendo datos de empresa:", error.message);
+    return {
+      empresa: nombreEmpresa,
+      activo: false,
+      ultimoCheck: "",
+      ultimoEstado: "",
+      ultimoDetalle: "",
+      cantidadPendientes: 0
+    };
+  }
+}
+
+async function obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit = 5) {
+  try {
+    const records = await base(TABLAS.aprobaciones)
+      .select({
+        filterByFormula: `{Empresa}="${escaparFormula(nombreEmpresa)}"`,
+        sort: [{ field: "Fecha solicitud", direction: "desc" }],
+        maxRecords: limit
+      })
+      .all();
+
+    return records.map((r) => ({
+      airtableRecordId: r.id,
+      empresa: r.get("Empresa") || "",
+      estado: r.get("Estado") || "",
+      cantidadAprobar: Number(r.get("Cantidad a aprobar") || 0),
+      fechaSolicitud: r.get("Fecha solicitud") || "",
+      fechaEjecucion: r.get("Fecha ejecución") || "",
+      solicitanteNombre: r.get("Nombre solicitante") || ""
+    }));
+  } catch (error) {
+    console.error("[Airtable] Error obteniendo historial de aprobaciones:", error.message);
+    return [];
+  }
+}
+
 module.exports = {
   obtenerUsuariosSimelActivos,
   obtenerTodosLosUsuariosSimelPendientes,
@@ -645,5 +857,13 @@ module.exports = {
   listarPendientesPorEmpresa,
   obtenerSesionWhatsApp,
   guardarSesionWhatsApp,
-  cerrarSesionWhatsApp
+  cerrarSesionWhatsApp,
+  crearAprobacionSimel,
+  buscarAprobacionPorToken,
+  actualizarEstadoAprobacion,
+  obtenerAprobacionesPendientesConfirmacion,
+  obtenerAdminsWhatsApp,
+  marcarEmpresasParaReintentar,
+  obtenerDatosEmpresaSimel,
+  obtenerHistorialAprobacionesEmpresa
 };

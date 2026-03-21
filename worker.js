@@ -5,10 +5,57 @@ const {
   buscarJobPendiente,
   actualizarJobSimel,
   crearDetalleJobSimel,
-  registrarManifiestoPendienteSimel
+  registrarManifiestoPendienteSimel,
+  obtenerAdminsWhatsApp
 } = require("./airtable");
 
 let trabajando = false;
+
+// === MEJORA 2: NOTIFICACIONES PROACTIVAS DESDE EL WORKER ===
+
+async function notificarAdmins(mensaje) {
+  const admins = await obtenerAdminsWhatsApp();
+
+  if (!admins.length) {
+    console.log("[Worker] No hay admins configurados para notificar");
+    return;
+  }
+
+  for (const admin of admins) {
+    const telefonoDestino = process.env.WHATSAPP_TEST_TO || admin.telefonoNormalizado;
+
+    try {
+      const version = process.env.WHATSAPP_API_VERSION || "v22.0";
+      const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+      const payload = {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: telefonoDestino,
+        type: "text",
+        text: { body: mensaje }
+      };
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        console.error(`[Worker] Error notificando admin ${admin.nombre}:`, data);
+      } else {
+        console.log(`[Worker] Notificación enviada a admin ${admin.nombre}`);
+      }
+    } catch (error) {
+      console.error(`[Worker] Error enviando notificación a ${admin.nombre}:`, error.message);
+    }
+  }
+}
 
 async function procesarJobPendiente() {
   if (trabajando) return;
@@ -122,6 +169,11 @@ async function procesarJobPendiente() {
       "Fin": new Date().toISOString(),
       "Detalle": `Finalizado. Procesadas ${procesadas} empresa(s).`
     });
+
+    // Notificar a admins cuando job finaliza exitosamente
+    await notificarAdmins(
+      `✅ *Job finalizado*\n\nJob ID: ${job.jobId}\nProcesadas: ${procesadas}\nCon manifiesto: ${conManifiesto}\nSin manifiesto: ${sinManifiesto}\nCon error: ${conError}`
+    );
   } catch (error) {
     console.error("[Worker] Error crítico:", error.message);
 
@@ -133,6 +185,11 @@ async function procesarJobPendiente() {
           "Detalle": `Error crítico: ${error.message}`
         });
         console.log(`[Worker] Job ${job.jobId} marcado como Error`);
+
+        // Notificar a admins en caso de error crítico
+        await notificarAdmins(
+          `🚨 *Error crítico en job*\n\nJob ID: ${job.jobId}\nError: ${error.message}`
+        );
       } catch (updateError) {
         console.error("[Worker] Error actualizando job a Error:", updateError.message);
       }
