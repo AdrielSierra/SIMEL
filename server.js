@@ -651,24 +651,30 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     let comando = detectarComando(text);
 
-    if (
-      sesionActiva &&
-      sesionActiva.estadoSesion === "Esperando empresa" &&
-      /^\d+$/.test(text.trim())
-    ) {
-      const dataSesion = parsearJSONSeguro(sesionActiva.observaciones, { candidatos: [] });
-      const candidatos = Array.isArray(dataSesion?.candidatos) ? dataSesion.candidatos : [];
-      const indice = Number(text.trim()) - 1;
+    if (sesionActiva && sesionActiva.estadoSesion === "Esperando empresa") {
+      if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
+        await cerrarSesionWhatsApp(from);
+        comando = { codigo: "MENU" };
+      } else if (/^\d+$/.test(text.trim())) {
+        const dataSesion = parsearJSONSeguro(sesionActiva.observaciones, { candidatos: [] });
+        const candidatos = Array.isArray(dataSesion?.candidatos) ? dataSesion.candidatos : [];
+        const indice = Number(text.trim()) - 1;
 
-      if (candidatos[indice]) {
-        comando = {
-          codigo: "SELECCION_EMPRESA",
-          empresa: candidatos[indice]
-        };
+        if (candidatos[indice]) {
+          comando = {
+            codigo: "SELECCION_EMPRESA",
+            empresa: candidatos[indice]
+          };
+        } else {
+          comando = {
+            codigo: "SELECCION_EMPRESA_INVALIDA",
+            candidatos
+          };
+        }
       } else {
         comando = {
-          codigo: "SELECCION_EMPRESA_INVALIDA",
-          candidatos
+          codigo: "BUSCAR_EMPRESA",
+          termino: text.trim()
         };
       }
     }
@@ -753,6 +759,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
     let jobRelacionado = null;
 
     if (comando.codigo === "MENU") {
+      await cerrarSesionWhatsApp(from);
+
       if (!contacto.puedeVerMenu) {
         respuesta = "No tenés permiso para ver el menú.";
       } else {
@@ -884,8 +892,20 @@ app.post("/whatsapp/webhook", async (req, res) => {
       if (contacto.rol !== "Admin") {
         respuesta = "Esta opción está disponible solo para administradores.";
       } else {
+        await guardarSesionWhatsApp({
+          telefono: from,
+          contactoAutorizadoRecordId: contacto.airtableRecordId,
+          ultimoMensaje: text,
+          ultimoComando: "BUSCAR_EMPRESA_AYUDA",
+          estadoSesion: "Esperando empresa",
+          empresaEnContexto: "",
+          observaciones: JSON.stringify({ candidatos: [] })
+        });
+
         respuesta =
           "Para buscar una empresa, escribí por ejemplo:\n\n" +
+          "petrolfe\n\n" +
+          "o también:\n" +
           "buscar empresa petrolfe";
       }
     }
@@ -894,21 +914,9 @@ app.post("/whatsapp/webhook", async (req, res) => {
       if (contacto.rol !== "Admin") {
         respuesta = "Esta opción está disponible solo para administradores.";
       } else {
-        const empresas = await listarEmpresasSimel({ soloActivas: true });
-        const coincidencias = buscarEmpresasInteligente(empresas, comando.termino);
+        const termino = (comando.termino || "").trim();
 
-        if (!coincidencias.length) {
-          respuesta =
-            `No encontré coincidencias para "${comando.termino}".\n\n` +
-            `Probá escribiendo por ejemplo:\n` +
-            `buscar empresa roal`;
-          await cerrarSesionWhatsApp(from);
-        } else if (coincidencias.length === 1 || coincidencias[0].score >= 92) {
-          await cerrarSesionWhatsApp(from);
-          respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
-        } else {
-          const candidatos = coincidencias.map((x) => x.empresa);
-
+        if (!termino || termino.toUpperCase() === "NOMBRE") {
           await guardarSesionWhatsApp({
             telefono: from,
             contactoAutorizadoRecordId: contacto.airtableRecordId,
@@ -916,28 +924,78 @@ app.post("/whatsapp/webhook", async (req, res) => {
             ultimoComando: "BUSCAR_EMPRESA",
             estadoSesion: "Esperando empresa",
             empresaEnContexto: "",
-            observaciones: JSON.stringify({
-              termino: comando.termino,
-              candidatos
-            })
+            observaciones: JSON.stringify({ candidatos: [] })
           });
 
           respuesta =
-            `Encontré estas empresas parecidas a "${comando.termino}":\n\n` +
-            candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-            `\n\nRespondé solo con el número de la empresa que querés consultar.`;
+            "Decime el nombre de la empresa que querés buscar.\n\n" +
+            "Ejemplos:\n" +
+            "- petrolfe\n" +
+            "- roal\n" +
+            "- ypf";
+        } else {
+          const empresas = await listarEmpresasSimel({ soloActivas: true });
+          const coincidencias = buscarEmpresasInteligente(empresas, termino);
+
+          if (!coincidencias.length) {
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "BUSCAR_EMPRESA",
+              estadoSesion: "Esperando empresa",
+              empresaEnContexto: "",
+              observaciones: JSON.stringify({ candidatos: [] })
+            });
+
+            respuesta =
+              `No encontré coincidencias para "${termino}".\n\n` +
+              "Probá escribiendo otro nombre o una parte del nombre.\n" +
+              "Por ejemplo:\n" +
+              "- petrolfe\n" +
+              "- roal\n" +
+              "- ypf";
+          } else if (coincidencias.length === 1 || coincidencias[0].score >= 92) {
+            await cerrarSesionWhatsApp(from);
+            respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
+          } else {
+            const candidatos = coincidencias.map((x) => x.empresa);
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "BUSCAR_EMPRESA",
+              estadoSesion: "Esperando empresa",
+              empresaEnContexto: "",
+              observaciones: JSON.stringify({
+                termino,
+                candidatos
+              })
+            });
+
+            respuesta =
+              `Encontré estas empresas parecidas a "${termino}":\n\n` +
+              candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+              "\n\nRespondé solo con el número de la empresa que querés consultar.\n" +
+              "O escribí otro nombre para volver a buscar.";
+          }
         }
       }
     }
 
     if (comando.codigo === "SELECCION_EMPRESA_INVALIDA") {
       if (!comando.candidatos?.length) {
-        respuesta = "No encontré una búsqueda activa. Escribí: buscar empresa NOMBRE";
+        respuesta =
+          "No encontré una búsqueda activa.\n\n" +
+          "Escribí el nombre de la empresa o:\n" +
+          "buscar empresa NOMBRE";
       } else {
         respuesta =
-          `La opción elegida no es válida.\n\n` +
+          "La opción elegida no es válida.\n\n" +
           comando.candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-          `\n\nRespondé solo con un número de la lista.`;
+          "\n\nRespondé solo con un número de la lista.\n" +
+          "O escribí otro nombre para volver a buscar.";
       }
     }
 
