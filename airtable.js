@@ -22,6 +22,10 @@ function escaparFormula(valor = "") {
     .replace(/"/g, '\\"');
 }
 
+function normalizarTelefono(valor = "") {
+  return String(valor).replace(/\D/g, "");
+}
+
 function normalizarTexto(valor = "") {
   return String(valor)
     .normalize("NFD")
