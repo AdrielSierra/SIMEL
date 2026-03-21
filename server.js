@@ -241,16 +241,22 @@ async function construirMenu(contacto) {
     ];
   }
 
+  const EMOJIS_MENU = ["📊", "⚠️", "🔎", "▶️", "📋", "🏢"];
+
   const lineas = items.map((item, index) => {
-    const comando = item.comandoExacto ? ` → ${item.comandoExacto}` : "";
-    return `${index + 1}. ${item.titulo}${comando}`;
+    const emoji = EMOJIS_MENU[index] || "•";
+    const comando = item.comandoExacto ? ` → _${item.comandoExacto}_` : "";
+    return `${emoji} *${index + 1}. ${item.titulo}*${comando}`;
   });
 
   if (contacto?.rol === "Admin") {
-    lineas.push(`${lineas.length + 1}. Buscar empresa → buscar empresa NOMBRE`);
+    const emoji = EMOJIS_MENU[lineas.length] || "🏢";
+    lineas.push(`${emoji} *${lineas.length + 1}. Buscar empresa* → _buscar empresa NOMBRE_`);
   }
 
-  return `${bienvenida}\n\n${lineas.join("\n")}`;
+  const pie = "\n\n_Escribí el número o el comando directamente._";
+
+  return `${bienvenida}\n\n${lineas.join("\n")}${pie}`;
 }
 
 async function enviarWhatsAppTexto({ to, body }) {
