@@ -412,6 +412,18 @@ function construirSubmenuJobs(contacto) {
   return lineas.join("\n");
 }
 
+function construirAyudaAprobarEmpresa() {
+  return (
+    "⚠️ *Aprobar manifiestos por empresa*\n\n" +
+    "Escribi el nombre (o parte del nombre) de la empresa que queres aprobar.\n\n" +
+    "Ejemplos:\n" +
+    "• united\n" +
+    "• ypf\n" +
+    "• petrolfe\n\n" +
+    "Escribi *menu* para cancelar."
+  );
+}
+
 async function enviarWhatsAppTexto({ to, body }) {
   if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
     throw new Error("Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
@@ -845,6 +857,41 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
+    if (sesionActiva && sesionActiva.estadoSesion === "Menu manifiestos") {
+      if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
+        await cerrarSesionWhatsApp(from);
+        comando = { codigo: "MENU" };
+      } else if (/^1$/.test(text.trim())) {
+        comando = { codigo: "MANIFIESTOS_PENDIENTES" };
+      } else if (/^2$/.test(text.trim())) {
+        comando = { codigo: "BUSCAR_EMPRESA_AYUDA" };
+      } else if (/^3$/.test(text.trim())) {
+        comando = { codigo: "APROBAR_EMPRESA_AYUDA" };
+      } else if (/^4$/.test(text.trim())) {
+        comando = { codigo: "CONSULTAR_EMPRESA_AYUDA" };
+      }
+    }
+
+    if (sesionActiva && sesionActiva.estadoSesion === "Esperando empresa aprobacion") {
+      if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
+        await cerrarSesionWhatsApp(from);
+        comando = { codigo: "MENU" };
+      } else {
+        comando = { codigo: "SOLICITAR_APROBACION", termino: text.trim() };
+      }
+    }
+
+    if (sesionActiva && sesionActiva.estadoSesion === "Empresa en contexto") {
+      if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
+        await cerrarSesionWhatsApp(from);
+        comando = { codigo: "MENU" };
+      } else if (/^(aprobar|aceptar)$/i.test(text.trim())) {
+        comando = { codigo: "SOLICITAR_APROBACION", termino: sesionActiva.empresaEnContexto || "" };
+      } else if (/^(consultar|ver|revisar)$/i.test(text.trim())) {
+        comando = { codigo: "CONSULTAR_EMPRESA", termino: sesionActiva.empresaEnContexto || "" };
+      }
+    }
+
     if (sesionActiva && sesionActiva.estadoSesion === "Aprobacion interactiva") {
       if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
         await cerrarSesionWhatsApp(from);
@@ -947,6 +994,15 @@ app.post("/whatsapp/webhook", async (req, res) => {
       if (!contacto.puedeVerManifiestosPendientes) {
         respuesta = "No tenes permiso para ver manifiestos pendientes.";
       } else {
+        await guardarSesionWhatsApp({
+          telefono: from,
+          contactoAutorizadoRecordId: contacto.airtableRecordId,
+          ultimoMensaje: text,
+          ultimoComando: "MENU_MANIFIESTOS",
+          estadoSesion: "Menu manifiestos",
+          empresaEnContexto: "",
+          observaciones: JSON.stringify({})
+        });
         respuesta = construirSubmenuManifiestos();
       }
     }
@@ -1105,6 +1161,48 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
+    if (comando.codigo === "APROBAR_EMPRESA_AYUDA") {
+      if (!contacto.puedeSolicitarAprobacion) {
+        respuesta = "No tenes permiso para aprobar manifiestos.";
+      } else {
+        await guardarSesionWhatsApp({
+          telefono: from,
+          contactoAutorizadoRecordId: contacto.airtableRecordId,
+          ultimoMensaje: text,
+          ultimoComando: "APROBAR_EMPRESA_AYUDA",
+          estadoSesion: "Esperando empresa aprobacion",
+          empresaEnContexto: "",
+          observaciones: JSON.stringify({})
+        });
+
+        respuesta = construirAyudaAprobarEmpresa();
+      }
+    }
+
+    if (comando.codigo === "CONSULTAR_EMPRESA_AYUDA") {
+      if (contacto.rol !== "Admin") {
+        respuesta = "Esta opción está disponible solo para administradores.";
+      } else {
+        await guardarSesionWhatsApp({
+          telefono: from,
+          contactoAutorizadoRecordId: contacto.airtableRecordId,
+          ultimoMensaje: text,
+          ultimoComando: "CONSULTAR_EMPRESA_AYUDA",
+          estadoSesion: "Esperando empresa",
+          empresaEnContexto: "",
+          observaciones: JSON.stringify({ candidatos: [] })
+        });
+
+        respuesta =
+          "🔎 *Consultar empresa*\n\n" +
+          "Escribi el nombre de la empresa para consultar SIMEL.\n\n" +
+          "Ejemplos:\n" +
+          "• united\n" +
+          "• ypf\n" +
+          "• petrolfe";
+      }
+    }
+
     if (comando.codigo === "BUSCAR_EMPRESA") {
       if (contacto.rol !== "Admin") {
         respuesta = "Esta opción está disponible solo para administradores.";
@@ -1152,9 +1250,17 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
           } else if (coincidencias[0].score === 100 || (coincidencias.length === 1 && coincidencias[0].score >= 84)) {
             // Coincidencia muy fuerte o única → responder directo
-            await cerrarSesionWhatsApp(from);
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "BUSCAR_EMPRESA",
+              estadoSesion: "Empresa en contexto",
+              empresaEnContexto: coincidencias[0].empresa,
+              observaciones: JSON.stringify({ empresa: coincidencias[0].empresa })
+            });
             respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
-            respuesta += `\n\nPara operar ahora: aprobar empresa ${coincidencias[0].empresa}`;
+            respuesta += `\n\nTambien podes responder solo: aprobar`;
 
           } else {
             const candidatos = coincidencias.map((x) => x.empresa);
@@ -1200,9 +1306,17 @@ app.post("/whatsapp/webhook", async (req, res) => {
         respuesta = "Esta opción está disponible solo para administradores.";
         await cerrarSesionWhatsApp(from);
       } else {
-        await cerrarSesionWhatsApp(from);
+        await guardarSesionWhatsApp({
+          telefono: from,
+          contactoAutorizadoRecordId: contacto.airtableRecordId,
+          ultimoMensaje: text,
+          ultimoComando: "SELECCION_EMPRESA",
+          estadoSesion: "Empresa en contexto",
+          empresaEnContexto: comando.empresa,
+          observaciones: JSON.stringify({ empresa: comando.empresa })
+        });
         respuesta = await construirRespuestaPendientesEmpresa(comando.empresa);
-        respuesta += `\n\nPara operar ahora: aprobar empresa ${comando.empresa}`;
+        respuesta += `\n\nTambien podes responder solo: aprobar`;
       }
     }
 
