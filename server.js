@@ -366,9 +366,9 @@ async function construirMenu(contacto) {
     `Hola, soy ${botNombre}. Elegi una opcion o escribi un comando.`;
 
   const lineas = [
-    "1. *Manifiestos y aprobacion* -> _manifiestos_",
-    "2. *Jobs y monitoreo* -> _jobs_",
-    "3. *Buscar empresa* -> _buscar empresa NOMBRE_"
+    "1. *Ver y aprobar manifiestos* -> _manifiestos_",
+    "2. *Ver estado del sistema* -> _jobs_",
+    "3. *Consultar una empresa* -> _empresa NOMBRE_"
   ];
 
   if (contacto?.puedeEjecutarBatch) {
@@ -381,7 +381,7 @@ async function construirMenu(contacto) {
     `${bienvenida}\n\n` +
     `*Menu principal*\n` +
     `${lineas.join("\n")}\n\n` +
-    `_Tip: entra a "Manifiestos" para revisar y aprobar por empresa._`
+    `_Tip: si queres aprobar una empresa, entra en "Manifiestos"._`
   );
 }
 
@@ -389,9 +389,9 @@ function construirSubmenuManifiestos() {
   return (
     "*Submenu Manifiestos*\n\n" +
     "1. Ver empresas con pendientes -> manifiestos pendientes\n" +
-    "2. Buscar una empresa -> buscar empresa NOMBRE\n" +
-    "3. Aprobar/rechazar por empresa -> aprobar empresa NOMBRE\n" +
-    "4. Consultar SIMEL puntual -> consultar NOMBRE\n\n" +
+    "2. Buscar una empresa -> empresa NOMBRE\n" +
+    "3. Aprobar una empresa -> aprobar empresa NOMBRE\n" +
+    "4. Consultar si una empresa tiene pendientes -> empresa NOMBRE\n\n" +
     "Escribi menu para volver al menu principal."
   );
 }
@@ -416,6 +416,18 @@ function construirAyudaAprobarEmpresa() {
   return (
     "⚠️ *Aprobar manifiestos por empresa*\n\n" +
     "Escribi el nombre (o parte del nombre) de la empresa que queres aprobar.\n\n" +
+    "Ejemplos:\n" +
+    "• united\n" +
+    "• ypf\n" +
+    "• petrolfe\n\n" +
+    "Escribi *menu* para cancelar."
+  );
+}
+
+function construirAyudaConsultarEmpresa() {
+  return (
+    "🔎 *Consultar empresa*\n\n" +
+    "Escribi el nombre de la empresa para ver si tiene manifiestos pendientes.\n\n" +
     "Ejemplos:\n" +
     "• united\n" +
     "• ypf\n" +
@@ -1137,8 +1149,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
     }
 
     if (comando.codigo === "BUSCAR_EMPRESA_AYUDA") {
-      if (contacto.rol !== "Admin") {
-        respuesta = "Esta opción está disponible solo para administradores.";
+      if (!contacto.puedeVerManifiestosPendientes) {
+        respuesta = "No tenes permiso para consultar empresas.";
       } else {
         await guardarSesionWhatsApp({
           telefono: from,
@@ -1150,14 +1162,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
           observaciones: JSON.stringify({ candidatos: [] })
         });
 
-        respuesta =
-          "🔍 *Búsqueda de empresa*\n\n" +
-          "Escribí el nombre (o parte del nombre) de la empresa.\n\n" +
-          "Ejemplos:\n" +
-          "• petrolfe\n" +
-          "• roal\n" +
-          "• ypf\n\n" +
-          "Escribí *menu* para cancelar.";
+        respuesta = construirAyudaConsultarEmpresa();
       }
     }
 
@@ -1180,8 +1185,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
     }
 
     if (comando.codigo === "CONSULTAR_EMPRESA_AYUDA") {
-      if (contacto.rol !== "Admin") {
-        respuesta = "Esta opción está disponible solo para administradores.";
+      if (!contacto.puedeVerManifiestosPendientes) {
+        respuesta = "No tenes permiso para consultar empresas.";
       } else {
         await guardarSesionWhatsApp({
           telefono: from,
@@ -1193,19 +1198,13 @@ app.post("/whatsapp/webhook", async (req, res) => {
           observaciones: JSON.stringify({ candidatos: [] })
         });
 
-        respuesta =
-          "🔎 *Consultar empresa*\n\n" +
-          "Escribi el nombre de la empresa para consultar SIMEL.\n\n" +
-          "Ejemplos:\n" +
-          "• united\n" +
-          "• ypf\n" +
-          "• petrolfe";
+        respuesta = construirAyudaConsultarEmpresa();
       }
     }
 
     if (comando.codigo === "BUSCAR_EMPRESA") {
-      if (contacto.rol !== "Admin") {
-        respuesta = "Esta opción está disponible solo para administradores.";
+      if (!contacto.puedeVerManifiestosPendientes) {
+        respuesta = "No tenes permiso para consultar empresas.";
       } else {
         const termino = (comando.termino || "").trim();
 

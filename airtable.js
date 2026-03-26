@@ -50,6 +50,83 @@ function limpiarCampos(fields) {
   return limpio;
 }
 
+function parsearJSONSeguro(valor, fallback = {}) {
+  if (!valor) return fallback;
+  if (typeof valor === "object") return valor;
+
+  try {
+    return JSON.parse(valor);
+  } catch {
+    return fallback;
+  }
+}
+
+function serializarObservacionesSesion({ observaciones, workflowEstado, workflowUltimoComando }) {
+  const baseObservaciones =
+    typeof observaciones === "string"
+      ? parsearJSONSeguro(observaciones, observaciones ? { nota: observaciones } : {})
+      : parsearJSONSeguro(observaciones, {});
+
+  const payload = {
+    ...baseObservaciones,
+    workflowEstado: workflowEstado || "",
+    workflowUltimoComando: workflowUltimoComando || ""
+  };
+
+  return JSON.stringify(payload);
+}
+
+function normalizarComandoAirtable(valor = "") {
+  const comando = String(valor || "").trim().toUpperCase();
+
+  const comandosPermitidos = new Set([
+    "",
+    "DESCONOCIDO",
+    "MENU",
+    "SIMEL_ESTADO",
+    "SIMEL_ERRORES",
+    "SIMEL_DETALLE",
+    "SIMEL_START",
+    "MANIFIESTOS_PENDIENTES",
+    "BUSCAR_EMPRESA",
+    "SOLICITAR_APROBACION",
+    "CONFIRMAR_APROBACION",
+    "SELECCION_EMPRESA",
+    "SELECCION_EMPRESA_INVALIDA"
+  ]);
+
+  if (comandosPermitidos.has(comando)) {
+    return comando;
+  }
+
+  if (
+    comando === "MENU_MANIFIESTOS" ||
+    comando === "MENU_JOBS" ||
+    comando === "BUSCAR_EMPRESA_AYUDA" ||
+    comando === "APROBAR_EMPRESA_AYUDA" ||
+    comando === "CONSULTAR_EMPRESA_AYUDA" ||
+    comando === "CONSULTAR_EMPRESA"
+  ) {
+    return "MENU";
+  }
+
+  return "DESCONOCIDO";
+}
+
+function normalizarEstadoSesionAirtable(valor = "") {
+  const estado = String(valor || "").trim();
+
+  if (!estado || estado === "Activa" || estado === "Cerrada") {
+    return estado || "Activa";
+  }
+
+  if (estado === "Esperando empresa" || estado === "Esperando confirmación aprobación") {
+    return estado;
+  }
+
+  return "Activa";
+}
+
 async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
   const records = await base(TABLAS.usuariosSimel)
     .select({
@@ -302,7 +379,7 @@ async function buscarAutorizadoWhatsApp(telefono) {
 
   return {
     airtableRecordId: r.id,
-    telefono: r.get("Teléfono") || "",
+    telefono: r.get("Tel\u00e9fono") || "",
     telefonoNormalizado: r.get("Teléfono normalizado") || telefonoNormalizado,
     nombre: r.get("Nombre") || "",
     activo: !!r.get("Activo"),
@@ -326,8 +403,8 @@ async function actualizarUltimaInteraccionWhatsApp(airtableRecordId, ultimoComan
     {
       id: airtableRecordId,
       fields: limpiarCampos({
-        "Última interacción": new Date().toISOString(),
-        "Último comando": ultimoComando
+        "\u00daltima interacci\u00f3n": new Date().toISOString(),
+        "\u00daltimo comando": normalizarComandoAirtable(ultimoComando)
       })
     }
   ]);
@@ -361,7 +438,7 @@ async function crearLogWhatsApp({
     "Message ID Meta": messageIdMeta,
     "Payload crudo entrada": payloadCrudoEntrada,
     "Texto recibido": textoRecibido,
-    "Comando detectado": comandoDetectado,
+    "Comando detectado": normalizarComandoAirtable(comandoDetectado),
     "Job ID relacionado": jobIdRelacionado,
     "Job relacionado": jobAirtableRecordId ? [jobAirtableRecordId] : undefined,
     "Respuesta enviada": respuestaEnviada,
@@ -549,7 +626,11 @@ async function obtenerSesionWhatsApp(telefono) {
   const r = await buscarSesionWhatsAppRecord(telefono);
   if (!r) return null;
 
-  const estadoSesion = r.get("Estado sesión") || "";
+  const observaciones = r.get("Observaciones") || "";
+  const dataSesion = parsearJSONSeguro(observaciones, {});
+  const estadoSesionGuardado = r.get("Estado sesi\u00f3n") || "";
+  const ultimoComandoGuardado = r.get("\u00daltimo comando") || "";
+  const estadoSesion = dataSesion.workflowEstado || estadoSesionGuardado;
   if (estadoSesion === "Cerrada") return null;
 
   const expiraEn = r.get("Expira en");
@@ -557,13 +638,13 @@ async function obtenerSesionWhatsApp(telefono) {
 
   return {
     airtableRecordId: r.id,
-    telefono: r.get("Teléfono") || "",
-    ultimoMensaje: r.get("Último mensaje") || "",
-    ultimoComando: r.get("Último comando") || "",
+    telefono: r.get("Tel\u00e9fono") || "",
+    ultimoMensaje: r.get("\u00daltimo mensaje") || "",
+    ultimoComando: dataSesion.workflowUltimoComando || ultimoComandoGuardado,
     estadoSesion,
     jobIdEnContexto: r.get("Job ID en contexto") || "",
     empresaEnContexto: r.get("Empresa en contexto") || "",
-    observaciones: r.get("Observaciones") || ""
+    observaciones
   };
 }
 
@@ -580,17 +661,22 @@ async function guardarSesionWhatsApp({
 }) {
   const telefonoNormalizado = normalizarTelefono(telefono);
   const existente = await buscarSesionWhatsAppRecord(telefonoNormalizado);
+  const observacionesSerializadas = serializarObservacionesSesion({
+    observaciones,
+    workflowEstado: estadoSesion,
+    workflowUltimoComando: ultimoComando
+  });
 
   const fields = limpiarCampos({
-    "Teléfono": telefonoNormalizado,
+    "Tel\u00e9fono": telefonoNormalizado,
     "Contacto autorizado": contactoAutorizadoRecordId ? [contactoAutorizadoRecordId] : undefined,
-    "Último mensaje": ultimoMensaje,
-    "Último comando": ultimoComando,
-    "Estado sesión": estadoSesion,
+    "\u00daltimo mensaje": ultimoMensaje,
+    "\u00daltimo comando": normalizarComandoAirtable(ultimoComando),
+    "Estado sesi\u00f3n": normalizarEstadoSesionAirtable(estadoSesion),
     "Job ID en contexto": jobIdEnContexto,
     "Empresa en contexto": empresaEnContexto,
     "Expira en": new Date(Date.now() + Number(ttlSegundos || 0) * 1000).toISOString(),
-    "Observaciones": observaciones
+    "Observaciones": observacionesSerializadas
   });
 
   if (existente) {
@@ -616,7 +702,7 @@ async function cerrarSesionWhatsApp(telefono) {
     {
       id: existente.id,
       fields: {
-        "Estado sesión": "Cerrada",
+        "Estado sesi\u00f3n": "Cerrada",
         "Job ID en contexto": "",
         "Empresa en contexto": "",
         "Observaciones": ""
@@ -624,8 +710,6 @@ async function cerrarSesionWhatsApp(telefono) {
     }
   ]);
 }
-
-// === MEJORA 1: FUNCIONES DE APROBACIÓN Y DATOS ===
 
 async function crearAprobacionSimel({ empresaNombre, pendienteRecordId, solicitanteRecordId, solicitanteTelefono, solicitanteNombre, cantidadPendientes, token }) {
   const fields = limpiarCampos({
@@ -883,3 +967,5 @@ module.exports = {
   obtenerAdminsWhatsApp,
   obtenerUsuarioSimelPorEmpresa
 };
+
+
