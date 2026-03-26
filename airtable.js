@@ -88,11 +88,7 @@ function normalizarComandoAirtable(valor = "") {
     "SIMEL_DETALLE",
     "SIMEL_START",
     "MANIFIESTOS_PENDIENTES",
-    "BUSCAR_EMPRESA",
-    "SOLICITAR_APROBACION",
-    "CONFIRMAR_APROBACION",
-    "SELECCION_EMPRESA",
-    "SELECCION_EMPRESA_INVALIDA"
+    "BUSCAR_EMPRESA"
   ]);
 
   if (comandosPermitidos.has(comando)) {
@@ -100,12 +96,21 @@ function normalizarComandoAirtable(valor = "") {
   }
 
   if (
-    comando === "MENU_MANIFIESTOS" ||
-    comando === "MENU_JOBS" ||
+    comando === "SOLICITAR_APROBACION" ||
+    comando === "CONFIRMAR_APROBACION" ||
+    comando === "SELECCION_EMPRESA" ||
+    comando === "SELECCION_EMPRESA_INVALIDA" ||
     comando === "BUSCAR_EMPRESA_AYUDA" ||
     comando === "APROBAR_EMPRESA_AYUDA" ||
     comando === "CONSULTAR_EMPRESA_AYUDA" ||
     comando === "CONSULTAR_EMPRESA"
+  ) {
+    return "BUSCAR_EMPRESA";
+  }
+
+  if (
+    comando === "MENU_MANIFIESTOS" ||
+    comando === "MENU_JOBS"
   ) {
     return "MENU";
   }
