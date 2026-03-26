@@ -575,7 +575,8 @@ async function guardarSesionWhatsApp({
   estadoSesion = "Activa",
   jobIdEnContexto = "",
   empresaEnContexto = "",
-  observaciones = ""
+  observaciones = "",
+  ttlSegundos = 15 * 60
 }) {
   const telefonoNormalizado = normalizarTelefono(telefono);
   const existente = await buscarSesionWhatsAppRecord(telefonoNormalizado);
@@ -588,7 +589,7 @@ async function guardarSesionWhatsApp({
     "Estado sesión": estadoSesion,
     "Job ID en contexto": jobIdEnContexto,
     "Empresa en contexto": empresaEnContexto,
-    "Expira en": new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    "Expira en": new Date(Date.now() + Number(ttlSegundos || 0) * 1000).toISOString(),
     "Observaciones": observaciones
   });
 

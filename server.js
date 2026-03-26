@@ -1,6 +1,7 @@
-const express = require("express");
+﻿const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
+const { listarPendientesSimel, operarManifiestoSimel } = require("./simel-pendientes");
 
 const {
   obtenerUsuariosSimelActivos,
@@ -142,6 +143,68 @@ function parsearJSONSeguro(texto, fallback = null) {
   }
 }
 
+function normalizarTextoPlano(valor = "") {
+  return String(valor)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+function construirListadoRevision(items = []) {
+  if (!items.length) return "No hay manifiestos pendientes.";
+
+  return items
+    .map((m, idx) => {
+      const primerResiduo = m.residuos?.[0]?.residuo || "N/D";
+      const primerCantidad = m.residuos?.[0]?.cantidadEst || "N/D";
+      const transportista = m.transportistas?.[0]?.nombre || "N/D";
+      return `${idx + 1}. ID ${m.idOperacion} | Residuo: ${primerResiduo} | Cant. Est: ${primerCantidad} | Transportista: ${transportista}`;
+    })
+    .join("\n");
+}
+
+function construirDetalleRevision(item, idx, total) {
+  const residuos = (item.residuos || [])
+    .slice(0, 5)
+    .map((r, i) => `${i + 1}. ${r.residuo || "N/D"} | Cant. Est: ${r.cantidadEst || "N/D"} ${r.unidad || ""}`.trim())
+    .join("\n");
+
+  const transportistas = (item.transportistas || [])
+    .slice(0, 5)
+    .map((t, i) => `${i + 1}. ${t.nombre || "N/D"} | CUIT: ${t.cuit || "N/D"}`)
+    .join("\n");
+
+  return (
+    `*Manifiesto ${idx + 1}/${total}*\n` +
+    `ID Operacion: ${item.idOperacion}\n` +
+    `Fecha: ${item.fechaCreacion || "N/D"}\n` +
+    `Empresa creadora: ${item.empresaCreadora || "N/D"}\n` +
+    `Est. creador: ${item.establecimientoCreador || "N/D"}\n\n` +
+    `*Residuos*\n${residuos || "Sin datos"}\n\n` +
+    `*Transportistas*\n${transportistas || "Sin datos"}\n\n` +
+    `Responde: *Aceptar*, *Rechazar* o *Cancelar*\n` +
+    `Tambien: *Aceptar todos*, *Lista*, *Siguiente*`
+  );
+}
+
+function buscarIndiceManifiesto(items = [], target = "", indiceFallback = 0) {
+  const limpio = String(target || "").trim();
+  if (!limpio) return indiceFallback;
+
+  if (/^\d+$/.test(limpio)) {
+    const numero = Number(limpio);
+    const porIndice = numero - 1;
+    if (porIndice >= 0 && porIndice < items.length) return porIndice;
+
+    const porId = items.findIndex((x) => String(x.idOperacion) === limpio);
+    return porId >= 0 ? porId : -1;
+  }
+
+  const porIdTexto = items.findIndex((x) => String(x.idOperacion) === limpio);
+  return porIdTexto >= 0 ? porIdTexto : -1;
+}
+
 async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
   const pendientes = await listarPendientesPorEmpresa(nombreEmpresa);
 
@@ -159,7 +222,7 @@ async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
     .map((p, i) => {
       const cantidad = p.cantidadPendientes || 0;
       const job = p.jobIdTexto || "Sin job";
-      return `${i + 1}. ${cantidad} pendiente(s) — ${job}`;
+      return `${i + 1}. ${cantidad} pendiente(s) - ${job}`;
     })
     .join("\n");
 
@@ -210,15 +273,35 @@ function detectarComando(texto = "") {
     return { codigo: "MENU" };
   }
 
-  if (/^(1|simel estado)$/i.test(t)) {
+  if (/^(1|manifiestos|menu manifiestos)$/i.test(t)) {
+    return { codigo: "MENU_MANIFIESTOS" };
+  }
+
+  if (/^(2|jobs|menu jobs)$/i.test(t)) {
+    return { codigo: "MENU_JOBS" };
+  }
+
+  if (/^(3|buscar empresa)$/i.test(t)) {
+    return { codigo: "BUSCAR_EMPRESA_AYUDA" };
+  }
+
+  if (/^(4|simel start|ejecutar batch)$/i.test(t)) {
+    return { codigo: "SIMEL_START" };
+  }
+
+  if (/^(5|mi perfil|perfil|mis permisos)$/i.test(t)) {
+    return { codigo: "MI_PERFIL" };
+  }
+
+  if (/^(simel estado|job estado|estado job)$/i.test(t)) {
     return { codigo: "SIMEL_ESTADO" };
   }
 
-  if (/^(2|simel errores)$/i.test(t)) {
+  if (/^(simel errores|job errores|errores job)$/i.test(t)) {
     return { codigo: "SIMEL_ERRORES" };
   }
 
-  if (/^(3)$/i.test(t)) {
+  if (/^(simel detalle|job detalle)$/i.test(t)) {
     return { codigo: "SIMEL_DETALLE" };
   }
 
@@ -227,16 +310,8 @@ function detectarComando(texto = "") {
     return { codigo: "SIMEL_DETALLE", jobId: detalleMatch[1] };
   }
 
-  if (/^(4|simel start)$/i.test(t)) {
-    return { codigo: "SIMEL_START" };
-  }
-
-  if (/^(5|manifiestos pendientes|pendientes|pendientes aprobar)$/i.test(t)) {
+  if (/^(manifiestos pendientes|pendientes|pendientes aprobar)$/i.test(t)) {
     return { codigo: "MANIFIESTOS_PENDIENTES" };
-  }
-
-  if (/^(6)$/i.test(t)) {
-    return { codigo: "BUSCAR_EMPRESA_AYUDA" };
   }
 
   const buscarEmpresaMatch = t.match(/^(buscar empresa|empresa)\s+(.+)$/i);
@@ -264,10 +339,6 @@ function detectarComando(texto = "") {
     return { codigo: "HISTORIAL_EMPRESA", termino: historialMatch[2].trim() };
   }
 
-  if (/^(mi perfil|perfil|mis permisos)$/i.test(t)) {
-    return { codigo: "MI_PERFIL" };
-  }
-
   if (/^reintentar errores$/i.test(t)) {
     return { codigo: "REINTENTAR_ERRORES" };
   }
@@ -292,50 +363,53 @@ async function construirMenu(contacto) {
   const botNombre = configBotNombre?.valorTexto || "HySA Bot";
   const bienvenida =
     configBienvenida?.valorTexto ||
-    `Hola, soy ${botNombre}. Elegí una opción o escribí un comando.`;
+    `Hola, soy ${botNombre}. Elegi una opcion o escribi un comando.`;
 
-  const menuDesdeTabla = await obtenerMenuWhatsApp();
+  const lineas = [
+    "1. *Manifiestos y aprobacion* -> _manifiestos_",
+    "2. *Jobs y monitoreo* -> _jobs_",
+    "3. *Buscar empresa* -> _buscar empresa NOMBRE_"
+  ];
 
-  let items = menuDesdeTabla.filter((item) => {
-    if (!item.activo) return false;
-    if (!item.requiereAutorizacion) return true;
-    return tienePermiso(contacto, item.permisoRequerido);
-  });
-
-  const vistos = new Set();
-  items = items.filter((item) => {
-    const clave = `${item.comandoExacto || ""}__${item.titulo || ""}`;
-    if (vistos.has(clave)) return false;
-    vistos.add(clave);
-    return true;
-  });
-
-  if (!items.length) {
-    items = [
-      { titulo: "Estado del último job", comandoExacto: "simel estado" },
-      { titulo: "Errores del último job", comandoExacto: "simel errores" },
-      { titulo: "Detalle de un job", comandoExacto: "simel detalle JOB-..." },
-      { titulo: "Ejecutar batch SIMEL", comandoExacto: "simel start" },
-      { titulo: "Manifiestos pendientes", comandoExacto: "manifiestos pendientes" }
-    ];
+  if (contacto?.puedeEjecutarBatch) {
+    lineas.push("4. *Ejecutar batch* -> _simel start_");
   }
 
-  const EMOJIS_MENU = ["📊", "⚠️", "🔎", "▶️", "📋", "🏢"];
+  lineas.push("5. *Mi perfil* -> _mi perfil_");
 
-  const lineas = items.map((item, index) => {
-    const emoji = EMOJIS_MENU[index] || "•";
-    const comando = item.comandoExacto ? ` → _${item.comandoExacto}_` : "";
-    return `${emoji} *${index + 1}. ${item.titulo}*${comando}`;
-  });
+  return (
+    `${bienvenida}\n\n` +
+    `*Menu principal*\n` +
+    `${lineas.join("\n")}\n\n` +
+    `_Tip: entra a "Manifiestos" para revisar y aprobar por empresa._`
+  );
+}
 
-  if (contacto?.rol === "Admin") {
-    const emoji = EMOJIS_MENU[lineas.length] || "🏢";
-    lineas.push(`${emoji} *${lineas.length + 1}. Buscar empresa* → _buscar empresa NOMBRE_`);
+function construirSubmenuManifiestos() {
+  return (
+    "*Submenu Manifiestos*\n\n" +
+    "1. Ver empresas con pendientes -> manifiestos pendientes\n" +
+    "2. Buscar una empresa -> buscar empresa NOMBRE\n" +
+    "3. Aprobar/rechazar por empresa -> aprobar empresa NOMBRE\n" +
+    "4. Consultar SIMEL puntual -> consultar NOMBRE\n\n" +
+    "Escribi menu para volver al menu principal."
+  );
+}
+
+function construirSubmenuJobs(contacto) {
+  const lineas = [
+    "*Submenu Jobs*\n",
+    "1. Estado del ultimo job -> simel estado",
+    "2. Errores del ultimo job -> simel errores",
+    "3. Detalle de un job -> simel detalle JOB-XXXXXXXX"
+  ];
+
+  if (contacto?.puedeEjecutarBatch) {
+    lineas.push("4. Ejecutar batch -> simel start");
   }
 
-  const pie = "\n\n_Escribí el número o el comando directamente._";
-
-  return `${bienvenida}\n\n${lineas.join("\n")}${pie}`;
+  lineas.push("\nEscribi menu para volver al menu principal.");
+  return lineas.join("\n");
 }
 
 async function enviarWhatsAppTexto({ to, body }) {
@@ -771,6 +845,15 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
+    if (sesionActiva && sesionActiva.estadoSesion === "Aprobacion interactiva") {
+      if (/^(menu|ayuda|hola|opciones|0)$/i.test(text.trim())) {
+        await cerrarSesionWhatsApp(from);
+        comando = { codigo: "MENU" };
+      } else {
+        comando = { codigo: "APROBACION_INTERACTIVA", texto: text.trim() };
+      }
+    }
+
     const contacto = await buscarAutorizadoWhatsApp(from);
 
     await crearLogWhatsApp({
@@ -857,6 +940,22 @@ app.post("/whatsapp/webhook", async (req, res) => {
         respuesta = "No tenés permiso para ver el menú.";
       } else {
         respuesta = await construirMenu(contacto);
+      }
+    }
+
+    if (comando.codigo === "MENU_MANIFIESTOS") {
+      if (!contacto.puedeVerManifiestosPendientes) {
+        respuesta = "No tenes permiso para ver manifiestos pendientes.";
+      } else {
+        respuesta = construirSubmenuManifiestos();
+      }
+    }
+
+    if (comando.codigo === "MENU_JOBS") {
+      if (!contacto.puedeConsultarEstado && !contacto.puedeConsultarErrores && !contacto.puedeVerDetalleJob) {
+        respuesta = "No tenes permisos para ver el submenu de jobs.";
+      } else {
+        respuesta = construirSubmenuJobs(contacto);
       }
     }
 
@@ -975,7 +1074,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
           respuesta =
             `Empresas con manifiestos pendientes:\n\n` +
-            lineas.join("\n");
+            lineas.join("\n") +
+            "\n\nPara aprobar una empresa: aprobar empresa NOMBRE";
         }
       }
     }
@@ -1054,6 +1154,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
             // Coincidencia muy fuerte o única → responder directo
             await cerrarSesionWhatsApp(from);
             respuesta = await construirRespuestaPendientesEmpresa(coincidencias[0].empresa);
+            respuesta += `\n\nPara operar ahora: aprobar empresa ${coincidencias[0].empresa}`;
 
           } else {
             const candidatos = coincidencias.map((x) => x.empresa);
@@ -1101,12 +1202,433 @@ app.post("/whatsapp/webhook", async (req, res) => {
       } else {
         await cerrarSesionWhatsApp(from);
         respuesta = await construirRespuestaPendientesEmpresa(comando.empresa);
+        respuesta += `\n\nPara operar ahora: aprobar empresa ${comando.empresa}`;
+      }
+    }
+
+    if (comando.codigo === "APROBACION_INTERACTIVA") {
+      const dataSesion = parsearJSONSeguro(sesionActiva?.observaciones, {});
+      const empresa = dataSesion?.empresa || sesionActiva?.empresaEnContexto || "";
+      let items = Array.isArray(dataSesion?.items) ? dataSesion.items : [];
+      let indiceActual = Number(dataSesion?.indiceActual || 0);
+      let pendienteRechazo = dataSesion?.pendienteRechazo || null;
+      let pasoRechazo = Number(dataSesion?.pasoRechazo || 0);
+      let confirmarAceptarTodos = !!dataSesion?.confirmarAceptarTodos;
+      const textoSesion = (comando.texto || "").trim();
+      const textoNorm = normalizarTextoPlano(textoSesion);
+
+      if (!empresa) {
+        await cerrarSesionWhatsApp(from);
+        respuesta = "La sesion de aprobacion vencio. Escribi: aprobar empresa NOMBRE";
+      } else if (textoNorm === "cancelar") {
+        await cerrarSesionWhatsApp(from);
+        respuesta = "Operacion cancelada. Volves al menu principal.";
+      } else {
+        const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+
+        if (!cred?.usuario || !cred?.password) {
+          await cerrarSesionWhatsApp(from);
+          respuesta = `No encontre credenciales activas para ${empresa}.`;
+        } else {
+          const aceptarTodosConfirmado = textoNorm === "confirmar aceptar todos";
+          const aceptarTodos = textoNorm === "aceptar todos";
+          const lista = textoNorm === "lista" || textoNorm === "ver todos";
+          const siguiente = textoNorm === "siguiente";
+          const aceptarMatch = textoSesion.match(/^aceptar(?:\s+(.+))?$/i);
+          const rechazarMatch = textoSesion.match(/^rechazar(?:\s+(.+))?$/i);
+
+          if (!items.length) {
+            const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+            if (!recarga.ok) {
+              await cerrarSesionWhatsApp(from);
+              respuesta = `Error consultando pendientes en SIMEL: ${recarga.error || "sin detalle"}`;
+            } else {
+              items = recarga.items;
+            }
+          }
+
+          if (!respuesta && !items.length) {
+            await cerrarSesionWhatsApp(from);
+            respuesta = `✅ ${empresa} no tiene manifiestos pendientes.`;
+          }
+
+          if (!respuesta && lista) {
+            respuesta =
+              `*Pendientes de ${empresa}*\n\n` +
+              construirListadoRevision(items) +
+              "\n\nResponde: Aceptar, Rechazar, Siguiente, Aceptar todos o Cancelar";
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "APROBACION_INTERACTIVA",
+              estadoSesion: "Aprobacion interactiva",
+              empresaEnContexto: empresa,
+              observaciones: JSON.stringify({
+                empresa,
+                items,
+                indiceActual,
+                pendienteRechazo,
+                pasoRechazo,
+                confirmarAceptarTodos
+              }),
+              ttlSegundos: 15
+            });
+          }
+
+          if (!respuesta && siguiente) {
+            indiceActual = (indiceActual + 1) % items.length;
+            const actual = items[indiceActual];
+            respuesta = construirDetalleRevision(actual, indiceActual, items.length);
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "APROBACION_INTERACTIVA",
+              estadoSesion: "Aprobacion interactiva",
+              empresaEnContexto: empresa,
+              observaciones: JSON.stringify({
+                empresa,
+                items,
+                indiceActual,
+                pendienteRechazo: null,
+                pasoRechazo: 0,
+                confirmarAceptarTodos: false
+              }),
+              ttlSegundos: 15
+            });
+          }
+
+          if (!respuesta && aceptarTodos) {
+            confirmarAceptarTodos = true;
+            respuesta =
+              `Vas a aprobar *${items.length}* manifiesto(s) de ${empresa}.\n` +
+              `Responde: *confirmar aceptar todos* para ejecutar.\n` +
+              `O responde *cancelar* para salir.`;
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "APROBACION_INTERACTIVA",
+              estadoSesion: "Aprobacion interactiva",
+              empresaEnContexto: empresa,
+              observaciones: JSON.stringify({
+                empresa,
+                items,
+                indiceActual,
+                pendienteRechazo: null,
+                pasoRechazo: 0,
+                confirmarAceptarTodos
+              }),
+              ttlSegundos: 15
+            });
+          }
+
+          if (!respuesta && aceptarTodosConfirmado) {
+            if (!confirmarAceptarTodos) {
+              respuesta = "Primero responde: *aceptar todos*";
+            } else {
+              let okCount = 0;
+              let errCount = 0;
+
+              for (const m of items) {
+                const r = await operarManifiestoSimel(cred.usuario, cred.password, {
+                  idOperacion: m.idOperacion,
+                  accion: "ACEPTAR"
+                });
+                if (r.ok) okCount++;
+                else errCount++;
+              }
+
+              const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+              const restantes = recarga.ok ? recarga.items : [];
+
+              if (!restantes.length) {
+                await cerrarSesionWhatsApp(from);
+                respuesta =
+                  `✅ Aprobacion masiva finalizada.\n` +
+                  `Aprobados: ${okCount}\nErrores: ${errCount}\n` +
+                  `No quedan pendientes en ${empresa}.`;
+              } else {
+                indiceActual = 0;
+                await guardarSesionWhatsApp({
+                  telefono: from,
+                  contactoAutorizadoRecordId: contacto.airtableRecordId,
+                  ultimoMensaje: text,
+                  ultimoComando: "APROBACION_INTERACTIVA",
+                  estadoSesion: "Aprobacion interactiva",
+                  empresaEnContexto: empresa,
+                  observaciones: JSON.stringify({
+                    empresa,
+                    items: restantes,
+                    indiceActual,
+                    pendienteRechazo: null,
+                    pasoRechazo: 0,
+                    confirmarAceptarTodos: false
+                  }),
+                  ttlSegundos: 15
+                });
+
+                respuesta =
+                  `Aprobados: ${okCount}. Errores: ${errCount}. Restan ${restantes.length}.\n\n` +
+                  construirDetalleRevision(restantes[indiceActual], indiceActual, restantes.length);
+              }
+            }
+          }
+
+          if (!respuesta && aceptarMatch) {
+            const target = (aceptarMatch[1] || "").trim();
+            const idx = buscarIndiceManifiesto(items, target, indiceActual);
+
+            if (idx < 0 || !items[idx]) {
+              respuesta = "No encontre ese manifiesto. Usa lista para ver opciones.";
+            } else {
+              const objetivo = items[idx];
+              const r = await operarManifiestoSimel(cred.usuario, cred.password, {
+                idOperacion: objetivo.idOperacion,
+                accion: "ACEPTAR"
+              });
+
+              if (!r.ok) {
+                respuesta = `No pude aprobar ${objetivo.idOperacion}: ${r.error || "sin detalle"}`;
+              } else {
+                const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+                const restantes = recarga.ok ? recarga.items : [];
+
+                if (!restantes.length) {
+                  await cerrarSesionWhatsApp(from);
+                  respuesta = `✅ Manifiesto ${objetivo.idOperacion} aprobado. No quedan pendientes en ${empresa}.`;
+                } else {
+                  const nextIndex = Math.min(idx, restantes.length - 1);
+                  await guardarSesionWhatsApp({
+                    telefono: from,
+                    contactoAutorizadoRecordId: contacto.airtableRecordId,
+                    ultimoMensaje: text,
+                    ultimoComando: "APROBACION_INTERACTIVA",
+                    estadoSesion: "Aprobacion interactiva",
+                    empresaEnContexto: empresa,
+                    observaciones: JSON.stringify({
+                      empresa,
+                      items: restantes,
+                      indiceActual: nextIndex,
+                      pendienteRechazo: null,
+                      pasoRechazo: 0,
+                      confirmarAceptarTodos: false
+                    }),
+                    ttlSegundos: 15
+                  });
+
+                  respuesta =
+                    `✅ Manifiesto ${objetivo.idOperacion} aprobado.\n\n` +
+                    construirDetalleRevision(restantes[nextIndex], nextIndex, restantes.length);
+                }
+              }
+            }
+          }
+
+          if (!respuesta && rechazarMatch) {
+            const target = (rechazarMatch[1] || "").trim();
+            const idx = buscarIndiceManifiesto(items, target, indiceActual);
+
+            if (idx < 0 || !items[idx]) {
+              respuesta = "No encontre ese manifiesto. Usa lista para ver opciones.";
+            } else {
+              const objetivo = items[idx];
+              pendienteRechazo = objetivo.idOperacion;
+              pasoRechazo = 1;
+
+              await guardarSesionWhatsApp({
+                telefono: from,
+                contactoAutorizadoRecordId: contacto.airtableRecordId,
+                ultimoMensaje: text,
+                ultimoComando: "APROBACION_INTERACTIVA",
+                estadoSesion: "Aprobacion interactiva",
+                empresaEnContexto: empresa,
+                observaciones: JSON.stringify({
+                  empresa,
+                  items,
+                  indiceActual: idx,
+                  pendienteRechazo,
+                  pasoRechazo,
+                  confirmarAceptarTodos: false
+                }),
+                ttlSegundos: 15
+              });
+
+              respuesta =
+                `Vas a rechazar ${objetivo.idOperacion}.\n` +
+                `Confirmacion 1/2: responde *confirmar rechazar*`;
+            }
+          }
+
+          if (!respuesta && textoNorm === "confirmar rechazar") {
+            if (!pendienteRechazo || pasoRechazo !== 1) {
+              respuesta = "Primero escribe: rechazar sobre un manifiesto.";
+            } else {
+              pasoRechazo = 2;
+              await guardarSesionWhatsApp({
+                telefono: from,
+                contactoAutorizadoRecordId: contacto.airtableRecordId,
+                ultimoMensaje: text,
+                ultimoComando: "APROBACION_INTERACTIVA",
+                estadoSesion: "Aprobacion interactiva",
+                empresaEnContexto: empresa,
+                observaciones: JSON.stringify({
+                  empresa,
+                  items,
+                  indiceActual,
+                  pendienteRechazo,
+                  pasoRechazo,
+                  confirmarAceptarTodos: false
+                }),
+                ttlSegundos: 15
+              });
+
+              respuesta = "Confirmacion 2/2: responde *confirmar rechazar definitivo*";
+            }
+          }
+
+          if (!respuesta && textoNorm === "confirmar rechazar definitivo") {
+            if (!pendienteRechazo || pasoRechazo !== 2) {
+              respuesta = "No hay un rechazo pendiente para confirmar.";
+            } else {
+              const rechazoId = pendienteRechazo;
+              const r = await operarManifiestoSimel(cred.usuario, cred.password, {
+                idOperacion: rechazoId,
+                accion: "RECHAZAR"
+              });
+
+              if (!r.ok) {
+                respuesta = `No pude rechazar ${rechazoId}: ${r.error || "sin detalle"}`;
+              } else {
+                const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+                const restantes = recarga.ok ? recarga.items : [];
+
+                if (!restantes.length) {
+                  await cerrarSesionWhatsApp(from);
+                  respuesta = `✅ Manifiesto ${rechazoId} rechazado. No quedan pendientes en ${empresa}.`;
+                } else {
+                  const nextIndex = Math.min(indiceActual, restantes.length - 1);
+                  await guardarSesionWhatsApp({
+                    telefono: from,
+                    contactoAutorizadoRecordId: contacto.airtableRecordId,
+                    ultimoMensaje: text,
+                    ultimoComando: "APROBACION_INTERACTIVA",
+                    estadoSesion: "Aprobacion interactiva",
+                    empresaEnContexto: empresa,
+                    observaciones: JSON.stringify({
+                      empresa,
+                      items: restantes,
+                      indiceActual: nextIndex,
+                      pendienteRechazo: null,
+                      pasoRechazo: 0,
+                      confirmarAceptarTodos: false
+                    }),
+                    ttlSegundos: 15
+                  });
+
+                  respuesta =
+                    `✅ Manifiesto ${rechazoId} rechazado.\n\n` +
+                    construirDetalleRevision(restantes[nextIndex], nextIndex, restantes.length);
+                }
+              }
+            }
+          }
+
+          if (!respuesta) {
+            const actual = items[indiceActual] || items[0];
+            const indice = items[indiceActual] ? indiceActual : 0;
+
+            await guardarSesionWhatsApp({
+              telefono: from,
+              contactoAutorizadoRecordId: contacto.airtableRecordId,
+              ultimoMensaje: text,
+              ultimoComando: "APROBACION_INTERACTIVA",
+              estadoSesion: "Aprobacion interactiva",
+              empresaEnContexto: empresa,
+              observaciones: JSON.stringify({
+                empresa,
+                items,
+                indiceActual: indice,
+                pendienteRechazo: null,
+                pasoRechazo: 0,
+                confirmarAceptarTodos: false
+              }),
+              ttlSegundos: 15
+            });
+
+            respuesta =
+              "Comando no valido para esta etapa.\n\n" +
+              construirDetalleRevision(actual, indice, items.length);
+          }
+        }
+      }
+    }
+
+    if (comando.codigo === "SOLICITAR_APROBACION") {
+      if (!contacto.puedeSolicitarAprobacion) {
+        respuesta = "No tenes permiso para solicitar aprobaciones.";
+      } else {
+        const termino = (comando.termino || "").trim();
+        const empresas = await listarEmpresasSimel({ soloActivas: true });
+        const coincidencias = buscarEmpresasInteligente(empresas, termino);
+
+        if (!coincidencias.length) {
+          respuesta = `No encontre la empresa "${termino}".`;
+        } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
+          const candidatos = coincidencias.map((x) => x.empresa);
+          respuesta =
+            `Encontre ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
+            "\n\nEscribi: aprobar empresa NOMBRE EXACTO";
+        } else {
+          const empresa = coincidencias[0].empresa;
+          const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+
+          if (!cred?.usuario || !cred?.password) {
+            respuesta = `No encontre credenciales activas para ${empresa}.`;
+          } else {
+            const pendientes = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+
+            if (!pendientes.ok) {
+              respuesta = `Error consultando pendientes en SIMEL: ${pendientes.error || "sin detalle"}`;
+            } else if (!pendientes.items.length) {
+              respuesta = `✅ ${empresa} no tiene manifiestos pendientes de aprobacion.`;
+            } else {
+              const indiceActual = 0;
+              await guardarSesionWhatsApp({
+                telefono: from,
+                contactoAutorizadoRecordId: contacto.airtableRecordId,
+                ultimoMensaje: text,
+                ultimoComando: "SOLICITAR_APROBACION",
+                estadoSesion: "Aprobacion interactiva",
+                empresaEnContexto: empresa,
+                observaciones: JSON.stringify({
+                  empresa,
+                  items: pendientes.items,
+                  indiceActual,
+                  pendienteRechazo: null,
+                  pasoRechazo: 0,
+                  confirmarAceptarTodos: false
+                }),
+                ttlSegundos: 15
+              });
+
+              respuesta =
+                `*Pendientes de ${empresa}* (${pendientes.items.length})\n\n` +
+                construirDetalleRevision(pendientes.items[indiceActual], indiceActual, pendientes.items.length);
+            }
+          }
+        }
       }
     }
 
     // === MEJORA 1: NUEVOS COMANDOS ===
 
-    if (comando.codigo === "SOLICITAR_APROBACION") {
+    if (false && comando.codigo === "SOLICITAR_APROBACION") {
       if (!contacto.puedeSolicitarAprobacion) {
         respuesta = "No tenés permiso para solicitar aprobaciones.";
       } else {
@@ -1173,7 +1695,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
       }
     }
 
-    if (comando.codigo === "CONFIRMAR_APROBACION") {
+    if (false && comando.codigo === "CONFIRMAR_APROBACION") {
       if (!contacto.puedeConfirmarAprobacion) {
         respuesta = "No tenés permiso para confirmar aprobaciones.";
       } else {
@@ -1394,7 +1916,9 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 `⚠️ *${empresa}*\n\n` +
                 `Tiene manifiestos pendientes.\n` +
                 `Filas detectadas: ${resultado.filas}\n\n` +
-                `Último check: ${new Date().toISOString().slice(0, 10)}`;
+                `Último check: ${new Date().toISOString().slice(0, 10)}\n\n` +
+                `Para revisar/aprobar ahora:\n` +
+                `aprobar empresa ${empresa}`;
             } else if (resultado.estado === "SIN_MANIFIESTO") {
               respuesta =
                 `✅ *${empresa}*\n\n` +
@@ -1473,3 +1997,5 @@ iniciarWorker();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
+

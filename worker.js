@@ -1,4 +1,5 @@
 const { checkSimel } = require("./simel-check");
+const { aprobarPendientesSimel } = require("./simel-approve");
 const {
   obtenerTodosLosUsuariosSimelPendientes,
   actualizarResultadoSimel,
@@ -10,6 +11,9 @@ const {
 } = require("./airtable");
 
 let trabajando = false;
+const AUTO_APPROVE_HABILITADO = /^(1|true|si|yes)$/i.test(
+  String(process.env.SIMEL_AUTO_APPROVE || "false")
+);
 
 // === MEJORA 2: NOTIFICACIONES PROACTIVAS ===
 
@@ -94,6 +98,20 @@ async function procesarJobPendiente() {
           recordId: item.recordId
         };
 
+        let aprobacionAutomatica = null;
+
+        if (resultado.estado === "CON_MANIFIESTO" && AUTO_APPROVE_HABILITADO) {
+          aprobacionAutomatica = await aprobarPendientesSimel(item.usuario, item.password);
+
+          if (aprobacionAutomatica.ok) {
+            resultado.detalle =
+              `${resultado.detalle} | ${aprobacionAutomatica.detalle}`;
+          } else {
+            resultado.detalle =
+              `${resultado.detalle} | Autoaprobacion fallida: ${aprobacionAutomatica.detalle}`;
+          }
+        }
+
         await actualizarResultadoSimel(resultado);
 
         await crearDetalleJobSimel({
@@ -102,7 +120,10 @@ async function procesarJobPendiente() {
           resultado
         });
 
-        if (resultado.estado === "CON_MANIFIESTO") {
+        const aproboCompleto =
+          aprobacionAutomatica?.ok && aprobacionAutomatica.estado === "APROBADO";
+
+        if (resultado.estado === "CON_MANIFIESTO" && !aproboCompleto) {
           await registrarManifiestoPendienteSimel({
             jobRecordId: job.airtableRecordId,
             jobIdTexto: job.jobId,
@@ -208,6 +229,9 @@ async function procesarJobPendiente() {
 
 function iniciarWorker() {
   console.log("[Worker] Iniciando worker de background. Revisando jobs cada 15 segundos...");
+  console.log(
+    `[Worker] Autoaprobacion SIMEL: ${AUTO_APPROVE_HABILITADO ? "ACTIVA" : "INACTIVA"} (SIMEL_AUTO_APPROVE)`
+  );
   setInterval(() => {
     procesarJobPendiente().catch((err) => {
       console.error("[Worker] Error no capturado en procesarJobPendiente:", err);
