@@ -857,6 +857,11 @@ app.post("/whatsapp/webhook", async (req, res) => {
     console.log("From:", from);
     console.log("Type:", type);
     console.log("Text:", text);
+    console.log("[WhatsApp] Sesion activa:", sesionActiva ? {
+      estadoSesion: sesionActiva.estadoSesion,
+      empresaEnContexto: sesionActiva.empresaEnContexto || "",
+      ultimoComando: sesionActiva.ultimoComando || ""
+    } : null);
 
     let comando = detectarComando(text);
 
@@ -1353,11 +1358,11 @@ app.post("/whatsapp/webhook", async (req, res) => {
           await cerrarSesionWhatsApp(from);
           respuesta = `No encontre credenciales activas para ${empresa}.`;
         } else {
-          const aceptarTodosConfirmado = textoNorm === "confirmar aceptar todos";
-          const aceptarTodos = textoNorm === "aceptar todos";
+          const aceptarTodosConfirmado = textoNorm === "confirmar aceptar todos" || textoNorm === "confirmar aprobar todos";
+          const aceptarTodos = textoNorm === "aceptar todos" || textoNorm === "aprobar todos";
           const lista = textoNorm === "lista" || textoNorm === "ver todos";
           const siguiente = textoNorm === "siguiente";
-          const aceptarMatch = textoSesion.match(/^aceptar(?:\s+(.+))?$/i);
+          const aceptarMatch = textoSesion.match(/^(aceptar|aprobar)(?:\s+(.+))?$/i);
           const rechazarMatch = textoSesion.match(/^rechazar(?:\s+(.+))?$/i);
 
           if (!items.length) {
@@ -1504,7 +1509,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
           }
 
           if (!respuesta && aceptarMatch) {
-            const target = (aceptarMatch[1] || "").trim();
+            const target = (aceptarMatch[2] || "").trim();
             const idx = buscarIndiceManifiesto(items, target, indiceActual);
 
             if (idx < 0 || !items[idx]) {
@@ -2118,6 +2123,8 @@ iniciarWorker();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
+
 
 
 

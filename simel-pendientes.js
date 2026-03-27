@@ -139,6 +139,15 @@ function normalizarTexto(v = "") {
     .trim();
 }
 
+function valorPorHeader(row = {}, aliases = []) {
+  for (const alias of aliases) {
+    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim()) {
+      return row[alias];
+    }
+  }
+  return "";
+}
+
 function mapearDetalle(detalleCrudo) {
   const tablas = detalleCrudo?.tablas || [];
 
@@ -151,13 +160,16 @@ function mapearDetalle(detalleCrudo) {
 
     if (headers.some((h) => h.includes("residuo"))) {
       const parsed = parsearTabla(tabla.headers, tabla.rows || []);
-      residuos = parsed.map((r) => ({
-        residuo: r["Residuo"] || r["Residuo(s)"] || "",
-        cantidadEst: r["Cantidad Est."] || r["Cantidad Est"] || "",
-        unidad: r["Unidad"] || "",
-        estado: r["Estado"] || "",
-        tipoContenedor: r["Tipo Cont."] || r["Tipo Cont"] || ""
-      }));
+      residuos = parsed.map((r, idx) => {
+        const raw = tabla.rows?.[idx] || [];
+        return {
+          tipoContenedor: valorPorHeader(r, ["Tipo Cont.", "Tipo Cont"]) || raw[0] || "",
+          residuo: valorPorHeader(r, ["Residuo", "Residuo(s)"]) || raw[2] || "",
+          cantidadEst: valorPorHeader(r, ["Cantidad Est.", "Cantidad Est"]) || raw[3] || "",
+          unidad: valorPorHeader(r, ["Unidad"]) || raw[4] || "",
+          estado: valorPorHeader(r, ["Estado"]) || raw[5] || ""
+        };
+      });
     }
 
     if (
@@ -165,12 +177,15 @@ function mapearDetalle(detalleCrudo) {
       (headers.includes("estado") && headers.includes("nombre") && headers.includes("cuit"))
     ) {
       const parsed = parsearTabla(tabla.headers, tabla.rows || []);
-      const mapped = parsed.map((r) => ({
-        nombre: r["Nombre"] || "",
-        cuit: r["Cuit"] || "",
-        estado: r["Estado"] || "",
-        expediente: r["Expediente"] || ""
-      }));
+      const mapped = parsed.map((r, idx) => {
+        const raw = tabla.rows?.[idx] || [];
+        return {
+          estado: valorPorHeader(r, ["Estado"]) || raw[0] || "",
+          nombre: valorPorHeader(r, ["Nombre"]) || raw[1] || "",
+          expediente: valorPorHeader(r, ["Expediente"]) || raw[3] || "",
+          cuit: valorPorHeader(r, ["Cuit", "CUIT"]) || raw[4] || ""
+        };
+      });
       if (mapped.length) {
         transportistas = mapped;
       }
