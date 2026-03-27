@@ -1396,8 +1396,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
           const aceptarTodos = textoNorm === "aceptar todos" || textoNorm === "aprobar todos";
           const lista = textoNorm === "lista" || textoNorm === "ver todos";
           const siguiente = textoNorm === "siguiente";
-          const aceptarMatch = textoSesion.match(/^(aceptar|aprobar)(?:\s+(.+))?$/i);
-          const rechazarMatch = textoSesion.match(/^rechazar(?:\s+(.+))?$/i);
+          const aceptarMatch = textoNorm.match(/^(aceptar|aprobar)(?:\s+(.+))?$/i);
+          const rechazarMatch = textoNorm.match(/^rechazar(?:\s+(.+))?$/i);
 
           if (!items.length) {
             const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
@@ -2189,6 +2189,7 @@ iniciarWorker();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
 
 
 
