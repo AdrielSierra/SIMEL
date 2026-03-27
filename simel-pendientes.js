@@ -172,27 +172,50 @@ function mapearDetalle(detalleCrudo) {
 }
 
 async function abrirDetallePorIndice(page, indice) {
+  await page
+    .locator('.modal[aria-hidden="false"], .modal.in, .modal.show')
+    .waitFor({ state: "hidden", timeout: 5000 })
+    .catch(() => {});
+
   const filas = page.locator("table tbody tr");
   const fila = filas.nth(indice);
   const celdaVisualizar = fila.locator("td").nth(5);
   const boton = celdaVisualizar.locator("a, button, i").first();
 
   await boton.waitFor({ state: "visible", timeout: 10000 });
-  await boton.click({ timeout: 10000 });
+  await boton.click({ timeout: 10000, force: true });
 
   const modal = page.locator(".modal-content").filter({ hasText: /Informaci.n del Manifiesto|Residuos/i }).first();
   await modal.waitFor({ state: "visible", timeout: 15000 });
 }
 
 async function cerrarModal(page) {
-  const cerrar = page.locator(".modal-content button.close, .modal-content .close").first();
-  if (await cerrar.count()) {
+  const modalVisible = page.locator('.modal[aria-hidden="false"], .modal.in, .modal.show').last();
+
+  if (!await modalVisible.count()) return;
+
+  const intentos = [
+    modalVisible.locator("button.close, .close").first(),
+    modalVisible.getByRole("button", { name: /cancelar/i }).first()
+  ];
+
+  for (const intento of intentos) {
     try {
-      await cerrar.click({ timeout: 3000 });
+      if (await intento.count()) {
+        await intento.click({ timeout: 3000, force: true });
+        break;
+      }
     } catch {
       // no-op
     }
   }
+
+  await page.keyboard.press("Escape").catch(() => {});
+  await page
+    .locator('.modal[aria-hidden="false"], .modal.in, .modal.show')
+    .waitFor({ state: "hidden", timeout: 8000 })
+    .catch(() => {});
+  await page.waitForTimeout(500);
 }
 
 async function listarPendientesSimelInterno(user, pass, { maxItems = 10 } = {}) {
@@ -345,4 +368,3 @@ module.exports = {
   listarPendientesSimel,
   operarManifiestoSimel
 };
-
