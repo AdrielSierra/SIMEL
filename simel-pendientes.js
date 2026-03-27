@@ -179,8 +179,11 @@ async function abrirDetallePorIndice(page, indice) {
 
   const filas = page.locator("table tbody tr");
   const fila = filas.nth(indice);
-  const celdaVisualizar = fila.locator("td").nth(5);
-  const boton = celdaVisualizar.locator("a, button, i").first();
+  const boton = fila
+    .locator('td')
+    .nth(5)
+    .locator('div.btn_operar_manifiesto, a, button, i.fa-search')
+    .first();
 
   await boton.waitFor({ state: "visible", timeout: 10000 });
   await boton.click({ timeout: 10000, force: true });
@@ -195,6 +198,7 @@ async function cerrarModal(page) {
   if (!await modalVisible.count()) return;
 
   const intentos = [
+    modalVisible.locator('button[data-dismiss="modal"]').filter({ hasText: /cancelar/i }).first(),
     modalVisible.locator("button.close, .close").first(),
     modalVisible.getByRole("button", { name: /cancelar/i }).first()
   ];
@@ -263,16 +267,40 @@ async function listarPendientesSimelInterno(user, pass, { maxItems = 10 } = {}) 
 }
 
 async function clickAccionEnModal(page, accion) {
-  const regex =
+  const modalVisible = page.locator('.modal[aria-hidden="false"], .modal.in, .modal.show').last();
+  const selectores =
     accion === "ACEPTAR"
-      ? /^Aceptar$/i
+      ? [
+          modalVisible.locator('button[id^="btn_aceptar_"]').first(),
+          modalVisible.getByRole("button", { name: /^Aceptar$/i }).first()
+        ]
       : accion === "RECHAZAR"
-        ? /^Rechazar$/i
-        : /^Cancelar$/i;
+        ? [
+            modalVisible.locator('button[id^="btn_rechazar_"]').first(),
+            modalVisible.getByRole("button", { name: /^Rechazar$/i }).first()
+          ]
+        : [
+            modalVisible.locator('button[data-dismiss="modal"]').filter({ hasText: /cancelar/i }).first(),
+            modalVisible.getByRole("button", { name: /^Cancelar$/i }).first()
+          ];
 
-  const boton = page.getByRole("button", { name: regex }).first();
+  let boton = null;
+  for (const candidato of selectores) {
+    try {
+      await candidato.waitFor({ state: "visible", timeout: 3000 });
+      boton = candidato;
+      break;
+    } catch {
+      // no-op
+    }
+  }
+
+  if (!boton) {
+    throw new Error(`No se encontro el boton para la accion ${accion}.`);
+  }
+
   await boton.waitFor({ state: "visible", timeout: 10000 });
-  await boton.click({ timeout: 10000 });
+  await boton.click({ timeout: 10000, force: true });
 
   if (accion !== "CANCELAR") {
     const confirmadores = [
