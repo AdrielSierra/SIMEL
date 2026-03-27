@@ -351,7 +351,27 @@ async function clickAccionEnModal(page, accion) {
   }
 
   await boton.waitFor({ state: "visible", timeout: 10000 });
-  await boton.click({ timeout: 10000, force: true });
+  await boton.scrollIntoViewIfNeeded().catch(() => {});
+  await page.waitForTimeout(300);
+  await boton.focus().catch(() => {});
+  await page.waitForTimeout(200);
+
+  try {
+    await boton.click({ timeout: 10000 });
+  } catch {
+    try {
+      await boton.click({ timeout: 10000, force: true });
+    } catch {
+      await boton.evaluate((el) => {
+        if (el && typeof el.scrollIntoView === "function") {
+          el.scrollIntoView({ block: "center", inline: "center" });
+        }
+        if (el && typeof el.click === "function") {
+          el.click();
+        }
+      });
+    }
+  }
 
   if (accion !== "CANCELAR") {
     const confirmadores = [
