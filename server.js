@@ -1675,6 +1675,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
               respuesta = "No encontre ese manifiesto. Usa lista para ver opciones.";
             } else {
               const objetivo = items[idx];
+              console.log("[WhatsApp] Aprobacion interactiva: aceptar", { empresa, idOperacion: objetivo.idOperacion, indiceActual: idx, totalItems: items.length });
               const r = await operarManifiestoSimel(cred.usuario, cred.password, {
                 idOperacion: objetivo.idOperacion,
                 accion: "ACEPTAR"
@@ -1686,6 +1687,8 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 accion: "ACEPTAR",
                 idOperacion: objetivo.idOperacion
               });
+
+              console.log("[WhatsApp] Resultado aprobar", { idOperacion: objetivo.idOperacion, ok: r.ok, confirmadoUI: r.confirmadoUI || false, error: r.error || "" });
 
               if (!r.ok) {
                 respuesta = `No pude aprobar ${objetivo.idOperacion}: ${r.error || "sin detalle"}`;
