@@ -1,6 +1,33 @@
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { chromium } = require("playwright");
 
 const SIMEL_LOGIN_URL = "https://simel.ambiente.gob.ar/me/login/login_usuario.php";
+
+async function guardarScreenshotTemporal(page, nombreBase) {
+  const nombreSeguro = String(nombreBase || "simel")
+    .replace(/[^a-zA-Z0-9-_]/g, "_")
+    .slice(0, 80);
+  const filePath = path.join(
+    os.tmpdir(),
+    `${Date.now()}_${nombreSeguro}.png`
+  );
+
+  await page.screenshot({ path: filePath, fullPage: true });
+  return filePath;
+}
+
+function limpiarArchivoTemporal(filePath) {
+  if (!filePath) return;
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch {
+    // no-op
+  }
+}
 
 async function clickPrimerElementoDisponible(locators, timeout = 12000) {
   let ultimoError = null;
@@ -349,6 +376,8 @@ async function clickAccionEnModal(page, accion) {
 async function operarManifiestoSimelInterno(user, pass, { idOperacion, accion }) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage();
+  let screenshotAntes = "";
+  let screenshotError = "";
 
   try {
     await loginYAbrirPendientes(page, user, pass);
@@ -365,6 +394,10 @@ async function operarManifiestoSimelInterno(user, pass, { idOperacion, accion })
     }
 
     await abrirDetallePorIndice(page, objetivo.rowIndex);
+    screenshotAntes = await guardarScreenshotTemporal(
+      page,
+      `simel_previo_${accion}_${idOperacion}`
+    ).catch(() => "");
     await clickAccionEnModal(page, accion);
     await page.waitForTimeout(2500);
 
@@ -376,14 +409,21 @@ async function operarManifiestoSimelInterno(user, pass, { idOperacion, accion })
       ok: true,
       accion,
       idOperacion,
-      confirmadoUI: accion === "ACEPTAR" ? aprobado : accion === "RECHAZAR" ? rechazado : true
+      confirmadoUI: accion === "ACEPTAR" ? aprobado : accion === "RECHAZAR" ? rechazado : true,
+      screenshotAntes
     };
   } catch (error) {
+    screenshotError = await guardarScreenshotTemporal(
+      page,
+      `simel_error_${accion}_${idOperacion}`
+    ).catch(() => "");
     return {
       ok: false,
       accion,
       idOperacion,
-      error: error.message
+      error: error.message,
+      screenshotAntes,
+      screenshotError
     };
   } finally {
     await browser.close();
@@ -412,11 +452,14 @@ async function operarManifiestoSimel(user, pass, payload) {
     ok: false,
     accion: payload?.accion || "",
     idOperacion: payload?.idOperacion || "",
-    error: err.message
+    error: err.message,
+    screenshotAntes: "",
+    screenshotError: ""
   }));
 }
 
 module.exports = {
   listarPendientesSimel,
-  operarManifiestoSimel
+  operarManifiestoSimel,
+  limpiarArchivoTemporal
 };

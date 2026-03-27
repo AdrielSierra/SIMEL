@@ -1,7 +1,9 @@
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
-const { listarPendientesSimel, operarManifiestoSimel } = require("./simel-pendientes");
+const { listarPendientesSimel, operarManifiestoSimel, limpiarArchivoTemporal } = require("./simel-pendientes");
 
 const {
   obtenerUsuariosSimelActivos,
@@ -503,6 +505,109 @@ async function enviarWhatsAppTexto({ to, body }) {
   return data;
 }
 
+async function subirMediaWhatsApp({ filePath, mimeType = "image/png" }) {
+  if (!process.env.WHATSAPP_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    throw new Error("Faltan WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID");
+  }
+
+  const version = process.env.WHATSAPP_API_VERSION || "v22.0";
+  const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/media`;
+  const form = new FormData();
+  const fileBuffer = fs.readFileSync(filePath);
+
+  form.append("messaging_product", "whatsapp");
+  form.append(
+    "file",
+    new Blob([fileBuffer], { type: mimeType }),
+    path.basename(filePath)
+  );
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
+    },
+    body: form
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`WhatsApp media upload error: ${response.status} - ${JSON.stringify(data)}`);
+  }
+
+  return data.id;
+}
+
+async function enviarWhatsAppDocumento({ to, filePath, caption = "", filename = "captura.png" }) {
+  const mediaId = await subirMediaWhatsApp({ filePath, mimeType: "image/png" });
+  const version = process.env.WHATSAPP_API_VERSION || "v22.0";
+  const url = `https://graph.facebook.com/${version}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`;
+
+  const payload = {
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to,
+    type: "document",
+    document: {
+      id: mediaId,
+      caption,
+      filename
+    }
+  };
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(payload)
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(`WhatsApp document send error: ${response.status} - ${JSON.stringify(data)}`);
+  }
+
+  return data;
+}
+
+async function enviarCapturasOperacionWhatsApp({ to, resultado, accion, idOperacion }) {
+  const paths = [
+    resultado?.screenshotAntes
+      ? {
+          filePath: resultado.screenshotAntes,
+          caption: `Captura previa a ${accion.toLowerCase()} el manifiesto ${idOperacion}`,
+          filename: `previo_${accion.toLowerCase()}_${idOperacion}.png`
+        }
+      : null,
+    !resultado?.ok && resultado?.screenshotError
+      ? {
+          filePath: resultado.screenshotError,
+          caption: `Captura de error al ${accion.toLowerCase()} el manifiesto ${idOperacion}`,
+          filename: `error_${accion.toLowerCase()}_${idOperacion}.png`
+        }
+      : null
+  ].filter(Boolean);
+
+  for (const item of paths) {
+    try {
+      await enviarWhatsAppDocumento({
+        to,
+        filePath: item.filePath,
+        caption: item.caption,
+        filename: item.filename
+      });
+    } catch (error) {
+      console.error("[WhatsApp] Error enviando captura:", error.message);
+    } finally {
+      limpiarArchivoTemporal(item.filePath);
+    }
+  }
+}
+
 async function crearJobDesdeBackend(disparadoPor = "Manual") {
   const jobExistente = await buscarJobPendienteOEnProceso();
 
@@ -941,6 +1046,18 @@ app.post("/whatsapp/webhook", async (req, res) => {
       } else {
         comando = { codigo: "APROBACION_INTERACTIVA", texto: text.trim() };
       }
+    }
+
+    const dataSesionActiva = parsearJSONSeguro(sesionActiva?.observaciones, {});
+    const tieneItemsAprobacion = Array.isArray(dataSesionActiva?.items) && dataSesionActiva.items.length > 0;
+
+    if (
+      sesionActiva &&
+      sesionActiva.empresaEnContexto &&
+      tieneItemsAprobacion &&
+      /^(1|2|3|4|5|6|aceptar|aprobar|rechazar|cancelar|lista|ver todos|siguiente|aceptar todos|aprobar todos|confirmar aceptar todos|confirmar aprobar todos|confirmar rechazar|confirmar rechazar definitivo|volver|atras)$/i.test(text.trim())
+    ) {
+      comando = { codigo: "APROBACION_INTERACTIVA", texto: text.trim() };
     }
 
     const contacto = await buscarAutorizadoWhatsApp(from);
@@ -1504,6 +1621,12 @@ app.post("/whatsapp/webhook", async (req, res) => {
                   idOperacion: m.idOperacion,
                   accion: "ACEPTAR"
                 });
+                await enviarCapturasOperacionWhatsApp({
+                  to: process.env.WHATSAPP_TEST_TO || from,
+                  resultado: r,
+                  accion: "ACEPTAR",
+                  idOperacion: m.idOperacion
+                });
                 if (r.ok) okCount++;
                 else errCount++;
               }
@@ -1555,6 +1678,13 @@ app.post("/whatsapp/webhook", async (req, res) => {
               const r = await operarManifiestoSimel(cred.usuario, cred.password, {
                 idOperacion: objetivo.idOperacion,
                 accion: "ACEPTAR"
+              });
+
+              await enviarCapturasOperacionWhatsApp({
+                to: process.env.WHATSAPP_TEST_TO || from,
+                resultado: r,
+                accion: "ACEPTAR",
+                idOperacion: objetivo.idOperacion
               });
 
               if (!r.ok) {
@@ -1694,6 +1824,13 @@ app.post("/whatsapp/webhook", async (req, res) => {
               const r = await operarManifiestoSimel(cred.usuario, cred.password, {
                 idOperacion: rechazoId,
                 accion: "RECHAZAR"
+              });
+
+              await enviarCapturasOperacionWhatsApp({
+                to: process.env.WHATSAPP_TEST_TO || from,
+                resultado: r,
+                accion: "RECHAZAR",
+                idOperacion: rechazoId
               });
 
               if (!r.ok) {
