@@ -95,9 +95,15 @@ async function extraerDetalleModal(page) {
     if (!modal) return { residuos: [], transportistas: [], bloques: [] };
 
     const tablas = Array.from(modal.querySelectorAll("table")).map((table) => {
-      const headers = Array.from(table.querySelectorAll("thead th, tr:first-child th")).map((th) =>
+      let headers = Array.from(table.querySelectorAll("thead th, thead td")).map((th) =>
         (th.textContent || "").replace(/\s+/g, " ").trim()
       );
+
+      if (!headers.length) {
+        headers = Array.from(table.querySelectorAll("tr:first-child th, tr:first-child td")).map((th) =>
+          (th.textContent || "").replace(/\s+/g, " ").trim()
+        );
+      }
 
       const bodyRows = Array.from(table.querySelectorAll("tbody tr")).map((tr) =>
         Array.from(tr.querySelectorAll("td")).map((td) =>
@@ -111,7 +117,10 @@ async function extraerDetalleModal(page) {
       let prev = table.previousElementSibling;
       while (prev && !titulo) {
         const t = (prev.textContent || "").replace(/\s+/g, " ").trim();
-        if (t) titulo = t;
+        const esTitulo =
+          prev.matches?.("p, .bg-info, .bg-danger, .bg-primary, .headerPopup") ||
+          /transportistas|residuos|vehiculos|operador|generadores|informacion/i.test(t);
+        if (t && esTitulo) titulo = t;
         prev = prev.previousElementSibling;
       }
 

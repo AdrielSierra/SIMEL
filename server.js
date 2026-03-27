@@ -1,4 +1,4 @@
-ï»¿const express = require("express");
+const express = require("express");
 const { checkSimel } = require("./simel-check");
 const { runBatch } = require("./simel-batch");
 const { listarPendientesSimel, operarManifiestoSimel } = require("./simel-pendientes");
@@ -46,14 +46,14 @@ function limpiarMensajesProcesados() {
   }
 }
 
-// === MEJORA 3: RATE LIMITING POR NÃšMERO ===
+// === MEJORA 3: RATE LIMITING POR NÚMERO ===
 
 const contadorMensajes = new Map();
 
 function verificarRateLimit(telefono) {
   const ahora = Date.now();
   const ventana = 60 * 1000; // 1 minuto
-  const limite = 15; // mÃ¡ximo 15 mensajes por minuto
+  const limite = 15; // máximo 15 mensajes por minuto
 
   if (!contadorMensajes.has(telefono)) {
     contadorMensajes.set(telefono, []);
@@ -214,7 +214,7 @@ function resumirErrorPendientesSimel(error = "") {
   }
 
   if (/timeout/i.test(detallePlano)) {
-    return "SIMEL tardÃ³ demasiado en responder al consultar pendientes. Intenta nuevamente.";
+    return "SIMEL tardó demasiado en responder al consultar pendientes. Intenta nuevamente.";
   }
 
   if (/login|credencial|usuario|password/i.test(detallePlano)) {
@@ -228,7 +228,7 @@ async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
   const pendientes = await listarPendientesPorEmpresa(nombreEmpresa);
 
   if (!pendientes.length) {
-    return `âœ… *${nombreEmpresa}*\n\nNo tiene manifiestos pendientes de aprobaciÃ³n.`;
+    return `? *${nombreEmpresa}*\n\nNo tiene manifiestos pendientes de aprobación.`;
   }
 
   const total = pendientes.reduce(
@@ -246,8 +246,8 @@ async function construirRespuestaPendientesEmpresa(nombreEmpresa) {
     .join("\n");
 
   return (
-    `âš ï¸ *${nombreEmpresa}*\n\n` +
-    `Tiene manifiestos pendientes de aprobaciÃ³n.\n` +
+    `?? *${nombreEmpresa}*\n\n` +
+    `Tiene manifiestos pendientes de aprobación.\n` +
     `Total: *${total}*\n\n` +
     `${detalle}`
   );
@@ -265,14 +265,14 @@ function tienePermiso(contacto, permisoRequerido = "") {
   if (!contacto) return false;
 
   const mapa = {
-    "Puede ver menÃº": contacto.puedeVerMenu,
+    "Puede ver menú": contacto.puedeVerMenu,
     "Puede consultar estado": contacto.puedeConsultarEstado,
     "Puede consultar errores": contacto.puedeConsultarErrores,
     "Puede ver detalle job": contacto.puedeVerDetalleJob,
     "Puede ejecutar batch": contacto.puedeEjecutarBatch,
     "Puede ver manifiestos pendientes": contacto.puedeVerManifiestosPendientes,
-    "Puede solicitar aprobaciÃ³n": contacto.puedeSolicitarAprobacion,
-    "Puede confirmar aprobaciÃ³n": contacto.puedeConfirmarAprobacion,
+    "Puede solicitar aprobación": contacto.puedeSolicitarAprobacion,
+    "Puede confirmar aprobación": contacto.puedeConfirmarAprobacion,
     "Puede aprobar manifiestos": contacto.puedeAprobarManifiestos
   };
 
@@ -433,24 +433,24 @@ function construirSubmenuJobs(contacto) {
 
 function construirAyudaAprobarEmpresa() {
   return (
-    "âš ï¸ *Aprobar manifiestos por empresa*\n\n" +
+    "?? *Aprobar manifiestos por empresa*\n\n" +
     "Escribi el nombre (o parte del nombre) de la empresa que queres aprobar.\n\n" +
     "Ejemplos:\n" +
-    "â€¢ united\n" +
-    "â€¢ ypf\n" +
-    "â€¢ petrolfe\n\n" +
+    "• united\n" +
+    "• ypf\n" +
+    "• petrolfe\n\n" +
     "Escribi *menu* para cancelar."
   );
 }
 
 function construirAyudaConsultarEmpresa() {
   return (
-    "ðŸ”Ž *Consultar empresa*\n\n" +
+    "?? *Consultar empresa*\n\n" +
     "Escribi el nombre de la empresa para ver si tiene manifiestos pendientes.\n\n" +
     "Ejemplos:\n" +
-    "â€¢ united\n" +
-    "â€¢ ypf\n" +
-    "â€¢ petrolfe\n\n" +
+    "• united\n" +
+    "• ypf\n" +
+    "• petrolfe\n\n" +
     "Escribi *menu* para cancelar."
   );
 }
@@ -485,7 +485,7 @@ async function enviarWhatsAppTexto({ to, body }) {
 
   const data = await response.json();
 
-  console.log("[WhatsApp] Status envÃ­o:", response.status);
+  console.log("[WhatsApp] Status envío:", response.status);
   console.log("[WhatsApp] Respuesta Graph:", JSON.stringify(data));
 
   if (!response.ok) {
@@ -516,7 +516,7 @@ async function crearJobDesdeBackend(disparadoPor = "Manual") {
       ok: false,
       sinPendientes: true,
       mensaje:
-        "No hay empresas pendientes para procesar.\n\nPara ejecutar un batch desde WhatsApp, marcÃ¡ 'Ejecutar batch' = true en uno o mÃ¡s registros de Usuarios_SIMEL."
+        "No hay empresas pendientes para procesar.\n\nPara ejecutar un batch desde WhatsApp, marcá 'Ejecutar batch' = true en uno o más registros de Usuarios_SIMEL."
     };
   }
 
@@ -535,7 +535,7 @@ async function crearJobDesdeBackend(disparadoPor = "Manual") {
 }
 
 app.get("/", (req, res) => {
-  res.send("SIMEL bot funcionando en Railway ðŸš€ - WhatsApp + menÃº + start + pendientes");
+  res.send("SIMEL bot funcionando en Railway ?? - WhatsApp + menú + start + pendientes");
 });
 
 app.get("/health", (req, res) => {
@@ -555,7 +555,7 @@ app.get("/check", async (req, res) => {
       return res.status(400).json({
         ok: false,
         error:
-          "Faltan credenciales. EnviÃ¡ ?user=...&pass=... o configurÃ¡ SIMEL_USER y SIMEL_PASS."
+          "Faltan credenciales. Enviá ?user=...&pass=... o configurá SIMEL_USER y SIMEL_PASS."
       });
     }
 
@@ -604,7 +604,7 @@ app.get("/batch/url-run", async (req, res) => {
     if (!process.env.BATCH_URL_TOKEN || token !== process.env.BATCH_URL_TOKEN) {
       return res.status(401).json({
         ok: false,
-        error: "Token invÃ¡lido"
+        error: "Token inválido"
       });
     }
 
@@ -797,7 +797,7 @@ app.get("/whatsapp/webhook", (req, res) => {
 
   return res.status(403).json({
     ok: false,
-    error: "VerificaciÃ³n invÃ¡lida"
+    error: "Verificación inválida"
   });
 });
 
@@ -950,7 +950,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
     });
 
     if (!contacto || !contacto.activo) {
-      const respuesta = "Tu nÃºmero no estÃ¡ autorizado para usar este bot.";
+      const respuesta = "Tu número no está autorizado para usar este bot.";
       const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
       try {
@@ -1008,14 +1008,14 @@ app.post("/whatsapp/webhook", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
-    let respuesta = "Comando no reconocido.\n\nEscribÃ­ MENU para ver las opciones.";
+    let respuesta = "Comando no reconocido.\n\nEscribí MENU para ver las opciones.";
     let jobRelacionado = null;
 
     if (comando.codigo === "MENU") {
       await cerrarSesionWhatsApp(from);
 
       if (!contacto.puedeVerMenu) {
-        respuesta = "No tenÃ©s permiso para ver el menÃº.";
+        respuesta = "No tenés permiso para ver el menú.";
       } else {
         respuesta = await construirMenu(contacto);
       }
@@ -1048,7 +1048,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "SIMEL_ESTADO") {
       if (!contacto.puedeConsultarEstado) {
-        respuesta = "No tenÃ©s permiso para consultar el estado.";
+        respuesta = "No tenés permiso para consultar el estado.";
       } else {
         const job = await obtenerUltimoJobSimel();
 
@@ -1057,7 +1057,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
         } else {
           jobRelacionado = job;
           respuesta =
-            `Ãšltimo job: ${job.jobId}\n` +
+            `Último job: ${job.jobId}\n` +
             `Estado: ${job.estado}\n` +
             `Empresas: ${job.totalEmpresas}\n` +
             `Procesadas: ${job.procesadas}\n` +
@@ -1069,7 +1069,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "SIMEL_ERRORES") {
       if (!contacto.puedeConsultarErrores) {
-        respuesta = "No tenÃ©s permiso para consultar errores.";
+        respuesta = "No tenés permiso para consultar errores.";
       } else {
         const job = await obtenerUltimoJobSimel();
 
@@ -1081,7 +1081,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
           const errores = items.filter((x) => x.estado === "ERROR");
 
           if (!errores.length) {
-            respuesta = `El Ãºltimo job (${job.jobId}) no tiene errores.`;
+            respuesta = `El último job (${job.jobId}) no tiene errores.`;
           } else {
             const top = errores.slice(0, 5).map((e, i) =>
               `${i + 1}. ${e.empresa} - ${(e.detalle || "ERROR").split("\n")[0]}`
@@ -1097,14 +1097,14 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "SIMEL_DETALLE") {
       if (!contacto.puedeVerDetalleJob) {
-        respuesta = "No tenÃ©s permiso para ver detalle de jobs.";
+        respuesta = "No tenés permiso para ver detalle de jobs.";
       } else if (!comando.jobId) {
-        respuesta = "Para ver el detalle, escribÃ­:\n\nsimel detalle JOB-XXXXXXXXXXXX";
+        respuesta = "Para ver el detalle, escribí:\n\nsimel detalle JOB-XXXXXXXXXXXX";
       } else {
         const job = await obtenerJobPorTexto(comando.jobId);
 
         if (!job) {
-          respuesta = `No encontrÃ© el job ${comando.jobId}.`;
+          respuesta = `No encontré el job ${comando.jobId}.`;
         } else {
           jobRelacionado = job;
           const items = await obtenerDetallesJobSimel(comando.jobId);
@@ -1129,7 +1129,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "SIMEL_START") {
       if (!contacto.puedeEjecutarBatch) {
-        respuesta = "No tenÃ©s permiso para ejecutar batch.";
+        respuesta = "No tenés permiso para ejecutar batch.";
       } else {
         const resultadoStart = await crearJobDesdeBackend("WhatsApp");
 
@@ -1146,12 +1146,12 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "MANIFIESTOS_PENDIENTES") {
       if (!contacto.puedeVerManifiestosPendientes) {
-        respuesta = "No tenÃ©s permiso para ver manifiestos pendientes.";
+        respuesta = "No tenés permiso para ver manifiestos pendientes.";
       } else {
         const pendientes = await listarManifiestosPendientesActivos({ limit: 10 });
 
         if (!pendientes.length) {
-          respuesta = "No hay manifiestos pendientes de aprobaciÃ³n.";
+          respuesta = "No hay manifiestos pendientes de aprobación.";
         } else {
           const lineas = pendientes.map((p, i) => {
             const empresa = p.empresa || "Empresa sin nombre";
@@ -1235,18 +1235,18 @@ app.post("/whatsapp/webhook", async (req, res) => {
           });
 
           respuesta =
-            "ðŸ” *BÃºsqueda de empresa*\n\n" +
-            "EscribÃ­ el nombre de la empresa que querÃ©s buscar.\n\n" +
+            "?? *Búsqueda de empresa*\n\n" +
+            "Escribí el nombre de la empresa que querés buscar.\n\n" +
             "Ejemplos:\n" +
-            "â€¢ petrolfe\n" +
-            "â€¢ roal\n" +
-            "â€¢ ypf";
+            "• petrolfe\n" +
+            "• roal\n" +
+            "• ypf";
         } else {
           const empresas = await listarEmpresasSimel({ soloActivas: true });
           const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
           if (!coincidencias.length) {
-            // Mantener sesiÃ³n activa para que pueda seguir buscando
+            // Mantener sesión activa para que pueda seguir buscando
             await guardarSesionWhatsApp({
               telefono: from,
               contactoAutorizadoRecordId: contacto.airtableRecordId,
@@ -1258,12 +1258,12 @@ app.post("/whatsapp/webhook", async (req, res) => {
             });
 
             respuesta =
-              `âŒ No encontrÃ© empresas parecidas a "${termino}".\n\n` +
-              "ProbÃ¡ con otro nombre o una parte del nombre.\n" +
-              "EscribÃ­ *menu* para salir.";
+              `? No encontré empresas parecidas a "${termino}".\n\n` +
+              "Probá con otro nombre o una parte del nombre.\n" +
+              "Escribí *menu* para salir.";
 
           } else if (coincidencias[0].score === 100 || (coincidencias.length === 1 && coincidencias[0].score >= 84)) {
-            // Coincidencia muy fuerte o Ãºnica â†’ responder directo
+            // Coincidencia muy fuerte o única ? responder directo
             await guardarSesionWhatsApp({
               telefono: from,
               contactoAutorizadoRecordId: contacto.airtableRecordId,
@@ -1290,11 +1290,11 @@ app.post("/whatsapp/webhook", async (req, res) => {
             });
 
             respuesta =
-              `ðŸ” EncontrÃ© ${candidatos.length} empresa(s) parecida(s) a "${termino}":\n\n` +
+              `?? Encontré ${candidatos.length} empresa(s) parecida(s) a "${termino}":\n\n` +
               candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-              "\n\nâœï¸ RespondÃ© con el *nÃºmero* de la empresa.\n" +
-              "O escribÃ­ otro nombre para buscar de nuevo.\n" +
-              "EscribÃ­ *menu* para salir.";
+              "\n\n?? Respondé con el *número* de la empresa.\n" +
+              "O escribí otro nombre para buscar de nuevo.\n" +
+              "Escribí *menu* para salir.";
           }
         }
       }
@@ -1303,15 +1303,15 @@ app.post("/whatsapp/webhook", async (req, res) => {
     if (comando.codigo === "SELECCION_EMPRESA_INVALIDA") {
       if (!comando.candidatos?.length) {
         respuesta =
-          "No encontrÃ© una bÃºsqueda activa.\n\n" +
-          "EscribÃ­ el nombre de la empresa o:\n" +
+          "No encontré una búsqueda activa.\n\n" +
+          "Escribí el nombre de la empresa o:\n" +
           "buscar empresa NOMBRE";
       } else {
         respuesta =
-          "âš ï¸ NÃºmero invÃ¡lido. Las opciones son:\n\n" +
+          "?? Número inválido. Las opciones son:\n\n" +
           comando.candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-          "\n\nRespondÃ© con un nÃºmero de la lista.\n" +
-          "O escribÃ­ otro nombre para buscar de nuevo.";
+          "\n\nRespondé con un número de la lista.\n" +
+          "O escribí otro nombre para buscar de nuevo.";
       }
     }
 
@@ -1373,7 +1373,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
           if (!respuesta && !items.length) {
             await cerrarSesionWhatsApp(from);
-            respuesta = `âœ… ${empresa} no tiene manifiestos pendientes.`;
+            respuesta = `? ${empresa} no tiene manifiestos pendientes.`;
           }
 
           if (!respuesta && lista) {
@@ -1397,7 +1397,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 pasoRechazo,
                 confirmarAceptarTodos
               }),
-              ttlSegundos: 15
+              ttlSegundos: 120
             });
           }
 
@@ -1421,7 +1421,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 pasoRechazo: 0,
                 confirmarAceptarTodos: false
               }),
-              ttlSegundos: 15
+              ttlSegundos: 120
             });
           }
 
@@ -1447,7 +1447,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 pasoRechazo: 0,
                 confirmarAceptarTodos
               }),
-              ttlSegundos: 15
+              ttlSegundos: 120
             });
           }
 
@@ -1473,7 +1473,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
               if (!restantes.length) {
                 await cerrarSesionWhatsApp(from);
                 respuesta =
-                  `âœ… Aprobacion masiva finalizada.\n` +
+                  `? Aprobacion masiva finalizada.\n` +
                   `Aprobados: ${okCount}\nErrores: ${errCount}\n` +
                   `No quedan pendientes en ${empresa}.`;
               } else {
@@ -1493,7 +1493,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                     pasoRechazo: 0,
                     confirmarAceptarTodos: false
                   }),
-                  ttlSegundos: 15
+                  ttlSegundos: 120
                 });
 
                 respuesta =
@@ -1524,7 +1524,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
                 if (!restantes.length) {
                   await cerrarSesionWhatsApp(from);
-                  respuesta = `âœ… Manifiesto ${objetivo.idOperacion} aprobado. No quedan pendientes en ${empresa}.`;
+                  respuesta = `? Manifiesto ${objetivo.idOperacion} aprobado. No quedan pendientes en ${empresa}.`;
                 } else {
                   const nextIndex = Math.min(idx, restantes.length - 1);
                   await guardarSesionWhatsApp({
@@ -1542,11 +1542,11 @@ app.post("/whatsapp/webhook", async (req, res) => {
                       pasoRechazo: 0,
                       confirmarAceptarTodos: false
                     }),
-                    ttlSegundos: 15
+                    ttlSegundos: 120
                   });
 
                   respuesta =
-                    `âœ… Manifiesto ${objetivo.idOperacion} aprobado.\n\n` +
+                    `? Manifiesto ${objetivo.idOperacion} aprobado.\n\n` +
                     construirDetalleRevision(restantes[nextIndex], nextIndex, restantes.length);
                 }
               }
@@ -1579,7 +1579,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                   pasoRechazo,
                   confirmarAceptarTodos: false
                 }),
-                ttlSegundos: 15
+                ttlSegundos: 120
               });
 
               respuesta =
@@ -1608,7 +1608,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                   pasoRechazo,
                   confirmarAceptarTodos: false
                 }),
-                ttlSegundos: 15
+                ttlSegundos: 120
               });
 
               respuesta = "Confirmacion 2/2: responde *confirmar rechazar definitivo*";
@@ -1633,7 +1633,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
                 if (!restantes.length) {
                   await cerrarSesionWhatsApp(from);
-                  respuesta = `âœ… Manifiesto ${rechazoId} rechazado. No quedan pendientes en ${empresa}.`;
+                  respuesta = `? Manifiesto ${rechazoId} rechazado. No quedan pendientes en ${empresa}.`;
                 } else {
                   const nextIndex = Math.min(indiceActual, restantes.length - 1);
                   await guardarSesionWhatsApp({
@@ -1651,11 +1651,11 @@ app.post("/whatsapp/webhook", async (req, res) => {
                       pasoRechazo: 0,
                       confirmarAceptarTodos: false
                     }),
-                    ttlSegundos: 15
+                    ttlSegundos: 120
                   });
 
                   respuesta =
-                    `âœ… Manifiesto ${rechazoId} rechazado.\n\n` +
+                    `? Manifiesto ${rechazoId} rechazado.\n\n` +
                     construirDetalleRevision(restantes[nextIndex], nextIndex, restantes.length);
                 }
               }
@@ -1681,7 +1681,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 pasoRechazo: 0,
                 confirmarAceptarTodos: false
               }),
-              ttlSegundos: 15
+              ttlSegundos: 120
             });
 
             respuesta =
@@ -1718,7 +1718,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
             console.error("[WhatsApp] Error consultando pendientes en SIMEL:", pendientes.error || "sin detalle");
             respuesta = resumirErrorPendientesSimel(pendientes.error);
           } else if (!pendientes.items.length) {
-            respuesta = `âœ… ${empresa} no tiene manifiestos pendientes de aprobacion.`;
+            respuesta = `? ${empresa} no tiene manifiestos pendientes de aprobacion.`;
           } else {
             const indiceActual = 0;
             await guardarSesionWhatsApp({
@@ -1736,7 +1736,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
                 pasoRechazo: 0,
                 confirmarAceptarTodos: false
               }),
-              ttlSegundos: 15
+              ttlSegundos: 120
             });
 
             respuesta =
@@ -1751,30 +1751,30 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (false && comando.codigo === "SOLICITAR_APROBACION") {
       if (!contacto.puedeSolicitarAprobacion) {
-        respuesta = "No tenÃ©s permiso para solicitar aprobaciones.";
+        respuesta = "No tenés permiso para solicitar aprobaciones.";
       } else {
         const termino = (comando.termino || "").trim();
         const empresas = await listarEmpresasSimel({ soloActivas: true });
         const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
         if (!coincidencias.length) {
-          respuesta = `âŒ No encontrÃ© la empresa "${termino}". VerificÃ¡ el nombre o escribÃ­:\nbuscar empresa NOMBRE`;
+          respuesta = `? No encontré la empresa "${termino}". Verificá el nombre o escribí:\nbuscar empresa NOMBRE`;
         } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
-          // MÃºltiples opciones
+          // Múltiples opciones
           const candidatos = coincidencias.map((x) => x.empresa);
 
           respuesta =
-            `EncontrÃ© ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
             candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-            "\n\nPara aprobar manifiestos de una empresa, escribÃ­:\n" +
+            "\n\nPara aprobar manifiestos de una empresa, escribí:\n" +
             "aprobar empresa NOMBRE EXACTO";
         } else {
-          // Una sola opciÃ³n o coincidencia perfecta
+          // Una sola opción o coincidencia perfecta
           const empresa = coincidencias[0].empresa;
           const pendientes = await listarPendientesPorEmpresa(empresa);
 
           if (!pendientes.length) {
-            respuesta = `âœ… ${empresa} no tiene manifiestos pendientes de aprobaciÃ³n.`;
+            respuesta = `? ${empresa} no tiene manifiestos pendientes de aprobación.`;
           } else {
             const cantidad = pendientes.reduce(
               (acc, item) => acc + Number(item.cantidadPendientes || 0),
@@ -1797,20 +1797,20 @@ app.post("/whatsapp/webhook", async (req, res) => {
               contactoAutorizadoRecordId: contacto.airtableRecordId,
               ultimoMensaje: text,
               ultimoComando: "SOLICITAR_APROBACION",
-              estadoSesion: "Esperando confirmaciÃ³n aprobaciÃ³n",
+              estadoSesion: "Esperando confirmación aprobación",
               empresaEnContexto: empresa,
               observaciones: JSON.stringify({ token, empresa, cantidad })
             });
 
             respuesta =
-              `âš ï¸ *Solicitud de aprobaciÃ³n*\n\n` +
+              `?? *Solicitud de aprobación*\n\n` +
               `Empresa: ${empresa}\n` +
               `Manifiestos a aprobar: ${cantidad}\n\n` +
-              `CÃ³digo de confirmaciÃ³n:\n` +
+              `Código de confirmación:\n` +
               `*${token}*\n\n` +
-              `EscribÃ­:\n` +
+              `Escribí:\n` +
               `confirmar ${token}\n\n` +
-              `para confirmar. Esta acciÃ³n no se puede deshacer.`;
+              `para confirmar. Esta acción no se puede deshacer.`;
           }
         }
       }
@@ -1818,12 +1818,12 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (false && comando.codigo === "CONFIRMAR_APROBACION") {
       if (!contacto.puedeConfirmarAprobacion) {
-        respuesta = "No tenÃ©s permiso para confirmar aprobaciones.";
+        respuesta = "No tenés permiso para confirmar aprobaciones.";
       } else {
         const aprobacion = await buscarAprobacionPorToken(comando.token);
 
         if (!aprobacion) {
-          respuesta = `âŒ El cÃ³digo ${comando.token} no es vÃ¡lido o ya fue usado.`;
+          respuesta = `? El código ${comando.token} no es válido o ya fue usado.`;
         } else {
           await actualizarEstadoAprobacion(aprobacion.airtableRecordId, {
             estado: "Confirmada",
@@ -1833,10 +1833,10 @@ app.post("/whatsapp/webhook", async (req, res) => {
           await cerrarSesionWhatsApp(from);
 
           respuesta =
-            `âœ… *AprobaciÃ³n confirmada*\n\n` +
+            `? *Aprobación confirmada*\n\n` +
             `Empresa: ${aprobacion.empresa}\n` +
             `Manifiestos: ${aprobacion.cantidadAprobar}\n\n` +
-            `La aprobaciÃ³n quedÃ³ registrada.\n` +
+            `La aprobación quedó registrada.\n` +
             `ID: ${aprobacion.airtableRecordId}`;
         }
       }
@@ -1844,23 +1844,23 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "MI_PERFIL") {
       const permisos = [
-        { nombre: "Ver menÃº", valor: !!contacto.puedeVerMenu },
+        { nombre: "Ver menú", valor: !!contacto.puedeVerMenu },
         { nombre: "Consultar estado", valor: !!contacto.puedeConsultarEstado },
         { nombre: "Consultar errores", valor: !!contacto.puedeConsultarErrores },
         { nombre: "Ver detalle job", valor: !!contacto.puedeVerDetalleJob },
         { nombre: "Ejecutar batch", valor: !!contacto.puedeEjecutarBatch },
         { nombre: "Ver manifiestos pendientes", valor: !!contacto.puedeVerManifiestosPendientes },
-        { nombre: "Solicitar aprobaciÃ³n", valor: !!contacto.puedeSolicitarAprobacion },
-        { nombre: "Confirmar aprobaciÃ³n", valor: !!contacto.puedeConfirmarAprobacion },
+        { nombre: "Solicitar aprobación", valor: !!contacto.puedeSolicitarAprobacion },
+        { nombre: "Confirmar aprobación", valor: !!contacto.puedeConfirmarAprobacion },
         { nombre: "Aprobar manifiestos", valor: !!contacto.puedeAprobarManifiestos }
       ];
 
       const listaPermisos = permisos
-        .map((p) => `${p.valor ? "âœ…" : "âŒ"} ${p.nombre}`)
+        .map((p) => `${p.valor ? "?" : "?"} ${p.nombre}`)
         .join("\n");
 
       respuesta =
-        `ðŸ‘¤ *Tu perfil*\n\n` +
+        `?? *Tu perfil*\n\n` +
         `Nombre: ${contacto.nombre}\n` +
         `Rol: ${contacto.rol}\n\n` +
         `*Permisos:*\n` +
@@ -1869,7 +1869,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "REINTENTAR_ERRORES") {
       if (!contacto.puedeEjecutarBatch) {
-        respuesta = "No tenÃ©s permiso para ejecutar batch.";
+        respuesta = "No tenés permiso para ejecutar batch.";
       } else {
         const job = await obtenerUltimoJobSimel();
 
@@ -1880,9 +1880,9 @@ app.post("/whatsapp/webhook", async (req, res) => {
           const errores = items.filter((x) => x.estado === "ERROR");
 
           if (!errores.length) {
-            respuesta = "âœ… El Ãºltimo job no tiene errores para reintentar.";
+            respuesta = "? El último job no tiene errores para reintentar.";
           } else {
-            // Extraer recordIds vÃ¡lidos
+            // Extraer recordIds válidos
             const recordIds = errores
               .map((e) => e.recordIdUsuario)
               .filter((id) => id && id.length > 0);
@@ -1894,7 +1894,7 @@ app.post("/whatsapp/webhook", async (req, res) => {
             const resultadoStart = await crearJobDesdeBackend("Reintento WhatsApp");
 
             respuesta =
-              `â–¶ï¸ *Reintento iniciado*\n\n` +
+              `?? *Reintento iniciado*\n\n` +
               `${errores.length} empresa(s) con error marcadas para reprocesar.\n` +
               `Job ID: ${resultadoStart.jobId}`;
           }
@@ -1904,37 +1904,37 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "ESTADO_EMPRESA") {
       if (contacto.rol !== "Admin") {
-        respuesta = "Esta opciÃ³n estÃ¡ disponible solo para administradores.";
+        respuesta = "Esta opción está disponible solo para administradores.";
       } else {
         const termino = (comando.termino || "").trim();
         const empresas = await listarEmpresasSimel({ soloActivas: true });
         const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
         if (!coincidencias.length) {
-          respuesta = `âŒ No encontrÃ© la empresa "${termino}".`;
+          respuesta = `? No encontré la empresa "${termino}".`;
         } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
-          // MÃºltiples opciones
+          // Múltiples opciones
           const candidatos = coincidencias.map((x) => x.empresa);
 
           respuesta =
-            `EncontrÃ© ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
             candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-            "\n\nEscribÃ­ el nombre exacto para ver el estado.";
+            "\n\nEscribí el nombre exacto para ver el estado.";
         } else {
-          // Una sola opciÃ³n
+          // Una sola opción
           const empresa = coincidencias[0].empresa;
           const datos = await obtenerDatosEmpresaSimel(empresa);
 
           if (!datos) {
-            respuesta = `âŒ No encontrÃ© datos para ${empresa}.`;
+            respuesta = `? No encontré datos para ${empresa}.`;
           } else {
-            const activa = datos.activo ? "âœ…" : "âŒ";
+            const activa = datos.activo ? "?" : "?";
 
             respuesta =
-              `ðŸ¢ *${datos.empresa}*\n\n` +
+              `?? *${datos.empresa}*\n\n` +
               `Activa: ${activa}\n` +
-              `Ãšltimo check: ${datos.ultimoCheck || "Sin datos"}\n` +
-              `Ãšltimo estado: ${datos.ultimoEstado || "Sin datos"}\n` +
+              `Último check: ${datos.ultimoCheck || "Sin datos"}\n` +
+              `Último estado: ${datos.ultimoEstado || "Sin datos"}\n` +
               `Filas pendientes: ${datos.cantidadFilasPendientes}\n\n` +
               `Detalle: ${datos.ultimoDetalle || "Sin detalle"}`;
           }
@@ -1944,40 +1944,40 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "HISTORIAL_EMPRESA") {
       if (contacto.rol !== "Admin") {
-        respuesta = "Esta opciÃ³n estÃ¡ disponible solo para administradores.";
+        respuesta = "Esta opción está disponible solo para administradores.";
       } else {
         const termino = (comando.termino || "").trim();
         const empresas = await listarEmpresasSimel({ soloActivas: true });
         const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
         if (!coincidencias.length) {
-          respuesta = `âŒ No encontrÃ© la empresa "${termino}".`;
+          respuesta = `? No encontré la empresa "${termino}".`;
         } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
-          // MÃºltiples opciones
+          // Múltiples opciones
           const candidatos = coincidencias.map((x) => x.empresa);
 
           respuesta =
-            `EncontrÃ© ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
             candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-            "\n\nEscribÃ­ el nombre exacto para ver el historial.";
+            "\n\nEscribí el nombre exacto para ver el historial.";
         } else {
-          // Una sola opciÃ³n
+          // Una sola opción
           const empresa = coincidencias[0].empresa;
           const historial = await obtenerHistorialAprobacionesEmpresa(empresa);
 
           if (!historial.length) {
-            respuesta = `ðŸ“‹ No hay aprobaciones registradas para ${empresa}.`;
+            respuesta = `?? No hay aprobaciones registradas para ${empresa}.`;
           } else {
             const lineas = historial.map((h, i) => {
               const fecha = h.fechaSolicitud ? h.fechaSolicitud.split("T")[0] : "N/A";
               const ejecucion = h.fechaEjecucion ? h.fechaEjecucion.split("T")[0] : "Pendiente";
-              return `${i + 1}. ${fecha} - ${h.estado} - ${h.cantidadAprobar} aprobada(s) por ${h.solicitanteNombre} (EjecuciÃ³n: ${ejecucion})`;
+              return `${i + 1}. ${fecha} - ${h.estado} - ${h.cantidadAprobar} aprobada(s) por ${h.solicitanteNombre} (Ejecución: ${ejecucion})`;
             });
 
             respuesta =
-              `ðŸ“‹ *Historial ${empresa}*\n\n` +
+              `?? *Historial ${empresa}*\n\n` +
               lineas.join("\n") +
-              `\n\nTotal: ${historial.length} aprobaciÃ³n(es)`;
+              `\n\nTotal: ${historial.length} aprobación(es)`;
           }
         }
       }
@@ -1985,32 +1985,32 @@ app.post("/whatsapp/webhook", async (req, res) => {
 
     if (comando.codigo === "CONSULTAR_EMPRESA") {
       if (contacto.rol !== "Admin") {
-        respuesta = "Esta opciÃ³n estÃ¡ disponible solo para administradores.";
+        respuesta = "Esta opción está disponible solo para administradores.";
       } else {
         const termino = (comando.termino || "").trim();
         const empresas = await listarEmpresasSimel({ soloActivas: true });
         const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
         if (!coincidencias.length) {
-          respuesta = `âŒ No encontrÃ© la empresa "${termino}".`;
+          respuesta = `? No encontré la empresa "${termino}".`;
         } else if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
-          // MÃºltiples opciones
+          // Múltiples opciones
           const candidatos = coincidencias.map((x) => x.empresa);
 
           respuesta =
-            `EncontrÃ© ${candidatos.length} empresa(s) parecida(s):\n\n` +
+            `Encontré ${candidatos.length} empresa(s) parecida(s):\n\n` +
             candidatos.map((empresa, i) => `${i + 1}. ${empresa}`).join("\n") +
-            "\n\nSÃ© mÃ¡s especÃ­fico para consultar SIMEL.";
+            "\n\nSé más específico para consultar SIMEL.";
         } else {
-          // Una sola opciÃ³n - CONSULTAR SIMEL
+          // Una sola opción - CONSULTAR SIMEL
           const empresa = coincidencias[0].empresa;
           const usuarioData = await obtenerUsuarioSimelPorEmpresa(empresa);
 
           if (!usuarioData) {
-            respuesta = `âŒ No encontrÃ© credenciales para ${empresa} en Usuarios_SIMEL.`;
+            respuesta = `? No encontré credenciales para ${empresa} en Usuarios_SIMEL.`;
           } else {
             // Enviar mensaje de "consultando..." primero
-            const mensajeConsultando = `ðŸ”„ Consultando SIMEL para ${empresa}... Esto puede tardar unos segundos.`;
+            const mensajeConsultando = `?? Consultando SIMEL para ${empresa}... Esto puede tardar unos segundos.`;
             const destinoWhatsapp = process.env.WHATSAPP_TEST_TO || from;
 
             try {
@@ -2034,20 +2034,20 @@ app.post("/whatsapp/webhook", async (req, res) => {
             // Construir respuesta final
             if (resultado.estado === "CON_MANIFIESTO") {
               respuesta =
-                `âš ï¸ *${empresa}*\n\n` +
+                `?? *${empresa}*\n\n` +
                 `Tiene manifiestos pendientes.\n` +
                 `Filas detectadas: ${resultado.filas}\n\n` +
-                `Ãšltimo check: ${new Date().toISOString().slice(0, 10)}\n\n` +
+                `Último check: ${new Date().toISOString().slice(0, 10)}\n\n` +
                 `Para revisar/aprobar ahora:\n` +
                 `aprobar empresa ${empresa}`;
             } else if (resultado.estado === "SIN_MANIFIESTO") {
               respuesta =
-                `âœ… *${empresa}*\n\n` +
+                `? *${empresa}*\n\n` +
                 `Sin manifiestos pendientes.\n\n` +
-                `Ãšltimo check: ${new Date().toISOString().slice(0, 10)}`;
+                `Último check: ${new Date().toISOString().slice(0, 10)}`;
             } else {
               respuesta =
-                `âŒ *${empresa}*\n\n` +
+                `? *${empresa}*\n\n` +
                 `Error al consultar SIMEL.\n\n` +
                 `Detalle: ${resultado.detalle}`;
             }
@@ -2118,5 +2118,6 @@ iniciarWorker();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Servidor corriendo en puerto ${PORT}`);
 });
+
 
 
