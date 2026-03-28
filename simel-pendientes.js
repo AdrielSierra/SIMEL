@@ -1,310 +1,12 @@
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { chromium } = require("playwright");
-
-const SIMEL_LOGIN_URL = "https://simel.ambiente.gob.ar/me/login/login_usuario.php";
-
-async function guardarScreenshotTemporal(page, nombreBase) {
-  const nombreSeguro = String(nombreBase || "simel")
-    .replace(/[^a-zA-Z0-9-_]/g, "_")
-    .slice(0, 80);
-  const filePath = path.join(
-    os.tmpdir(),
-    `${Date.now()}_${nombreSeguro}.png`
-  );
-
-  await page.screenshot({ path: filePath, fullPage: true });
-  return filePath;
-}
-
-function limpiarArchivoTemporal(filePath) {
-  if (!filePath) return;
-  try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch {
-    // no-op
-  }
-}
-
-async function clickPrimerElementoDisponible(locators, timeout = 12000) {
-  let ultimoError = null;
-
-  for (const locator of locators) {
-    try {
-      await locator.waitFor({ state: "visible", timeout });
-      await locator.click({ timeout });
-      return;
-    } catch (error) {
-      ultimoError = error;
-    }
-  }
-
-  throw ultimoError || new Error("No se encontro un elemento clickeable.");
-}
-
-async function abrirPendientes(page) {
-  const intentos = [
-    page.getByRole("link", { name: /pendientes/i }).first(),
-    page.getByRole("button", { name: /pendientes/i }).first(),
-    page.locator("a, button, span, div").filter({ hasText: /^Pendientes$/i }).first(),
-    page.getByText(/^Pendientes$/i).first()
-  ];
-
-  await clickPrimerElementoDisponible(intentos, 15000);
-  await page.getByText(/MANIFIESTOS PENDIENTES/i).waitFor({ timeout: 30000 });
-}
-
-async function loginYAbrirPendientes(page, user, pass) {
-  await page.goto(SIMEL_LOGIN_URL, {
-    waitUntil: "domcontentloaded",
-    timeout: 60000
-  });
-
-  await page.locator("input").nth(0).fill(user);
-  await page.locator("input").nth(1).fill(pass);
-  await page.getByRole("button", { name: /ingresar/i }).click();
-
-  await page.waitForLoadState("domcontentloaded", { timeout: 60000 });
-  await page.waitForTimeout(2000);
-  await abrirPendientes(page);
-}
-
-async function extraerFilasPendientes(page) {
-  return page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll("table tbody tr"));
-
-    return rows
-      .map((tr, idx) => {
-        const celdas = Array.from(tr.querySelectorAll("td")).map((td) =>
-          (td.textContent || "").replace(/\s+/g, " ").trim()
-        );
-
-        if (celdas.length < 6) return null;
-        if (!/^\d+$/.test(celdas[0] || "")) return null;
-
-        const botonVisualizar =
-          tr.querySelector("td:last-child a, td:last-child button, td:last-child i");
-
-        if (!botonVisualizar) return null;
-
-        return {
-          rowIndex: idx,
-          idOperacion: celdas[0] || "",
-          fechaCreacion: celdas[1] || "",
-          empresaCreadora: celdas[2] || "",
-          establecimientoCreador: celdas[3] || "",
-          aprobadoPor: celdas[4] || ""
-        };
-      })
-      .filter(Boolean);
-  });
-}
-
-function parsearTabla(headers, rows) {
-  return rows.map((row) => {
-    const item = {};
-    headers.forEach((h, i) => {
-      item[h] = row[i] || "";
-    });
-    return item;
-  });
-}
-
-async function extraerDetalleModal(page) {
-  return page.evaluate(() => {
-    const modal =
-      document.querySelector(".modal.in .modal-content") ||
-      document.querySelector(".modal.show .modal-content");
-
-    if (!modal) return { residuos: [], transportistas: [], bloques: [] };
-
-    const tablas = Array.from(modal.querySelectorAll("table")).map((table) => {
-      let headers = Array.from(table.querySelectorAll("thead th, thead td")).map((th) =>
-        (th.textContent || "").replace(/\s+/g, " ").trim()
-      );
-
-      if (!headers.length) {
-        headers = Array.from(table.querySelectorAll("tr:first-child th, tr:first-child td")).map((th) =>
-          (th.textContent || "").replace(/\s+/g, " ").trim()
-        );
-      }
-
-      const bodyRows = Array.from(table.querySelectorAll("tbody tr")).map((tr) =>
-        Array.from(tr.querySelectorAll("td")).map((td) =>
-          (td.textContent || "").replace(/\s+/g, " ").trim()
-        )
-      );
-
-      const rows = bodyRows.filter((r) => r.some((x) => x));
-
-      let titulo = "";
-      let prev = table.previousElementSibling;
-      while (prev && !titulo) {
-        const t = (prev.textContent || "").replace(/\s+/g, " ").trim();
-        const esTitulo =
-          prev.matches?.("p, .bg-info, .bg-danger, .bg-primary, .headerPopup") ||
-          /transportistas|residuos|vehiculos|operador|generadores|informacion/i.test(t);
-        if (t && esTitulo) titulo = t;
-        prev = prev.previousElementSibling;
-      }
-
-      return { titulo, headers, rows };
-    });
-
-    return { tablas };
-  });
-}
-
-function normalizarTexto(v = "") {
-  return String(v)
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .trim();
-}
-
-function valorPorHeader(row = {}, aliases = []) {
-  for (const alias of aliases) {
-    if (row[alias] !== undefined && row[alias] !== null && String(row[alias]).trim()) {
-      return row[alias];
-    }
-  }
-  return "";
-}
-
-function mapearDetalle(detalleCrudo) {
-  const tablas = detalleCrudo?.tablas || [];
-
-  let residuos = [];
-  let transportistas = [];
-
-  for (const tabla of tablas) {
-    const headers = (tabla.headers || []).map((h) => normalizarTexto(h));
-    const titulo = normalizarTexto(tabla.titulo || "");
-
-    if (headers.some((h) => h.includes("residuo"))) {
-      const parsed = parsearTabla(tabla.headers, tabla.rows || []);
-      residuos = parsed.map((r, idx) => {
-        const raw = tabla.rows?.[idx] || [];
-        return {
-          tipoContenedor: valorPorHeader(r, ["Tipo Cont.", "Tipo Cont"]) || raw[0] || "",
-          residuo: valorPorHeader(r, ["Residuo", "Residuo(s)"]) || raw[2] || "",
-          cantidadEst: valorPorHeader(r, ["Cantidad Est.", "Cantidad Est"]) || raw[3] || "",
-          unidad: valorPorHeader(r, ["Unidad"]) || raw[4] || "",
-          estado: valorPorHeader(r, ["Estado"]) || raw[5] || ""
-        };
-      });
-    }
-
-    if (
-      titulo.includes("transportistas") ||
-      (headers.includes("estado") && headers.includes("nombre") && headers.includes("cuit"))
-    ) {
-      const parsed = parsearTabla(tabla.headers, tabla.rows || []);
-      const mapped = parsed.map((r, idx) => {
-        const raw = tabla.rows?.[idx] || [];
-        return {
-          estado: valorPorHeader(r, ["Estado"]) || raw[0] || "",
-          nombre: valorPorHeader(r, ["Nombre"]) || raw[1] || "",
-          expediente: valorPorHeader(r, ["Expediente"]) || raw[3] || "",
-          cuit: valorPorHeader(r, ["Cuit", "CUIT"]) || raw[4] || ""
-        };
-      });
-      if (mapped.length) {
-        transportistas = mapped;
-      }
-    }
-  }
-
-  return { residuos, transportistas };
-}
-
-async function abrirDetallePorIndice(page, indice) {
-  await page
-    .locator('.modal[aria-hidden="false"], .modal.in, .modal.show')
-    .waitFor({ state: "hidden", timeout: 5000 })
-    .catch(() => {});
-
-  const filas = page.locator("table tbody tr");
-  const fila = filas.nth(indice);
-  const boton = fila
-    .locator('td')
-    .nth(5)
-    .locator('div.btn_operar_manifiesto, a, button, i.fa-search')
-    .first();
-
-  await boton.waitFor({ state: "visible", timeout: 10000 });
-  await boton.click({ timeout: 10000, force: true });
-
-  const modal = page.locator(".modal-content").filter({ hasText: /Informaci.n del Manifiesto|Residuos/i }).first();
-  await modal.waitFor({ state: "visible", timeout: 15000 });
-}
-
-async function cerrarModal(page) {
-  const modalVisible = page.locator('.modal[aria-hidden="false"], .modal.in, .modal.show').last();
-
-  if (!await modalVisible.count()) return;
-
-  const intentos = [
-    modalVisible.locator('button[data-dismiss="modal"]').filter({ hasText: /cancelar/i }).first(),
-    modalVisible.locator("button.close, .close").first(),
-    modalVisible.getByRole("button", { name: /cancelar/i }).first()
-  ];
-
-  for (const intento of intentos) {
-    try {
-      if (await intento.count()) {
-        await intento.click({ timeout: 3000, force: true });
-        break;
-      }
-    } catch {
-      // no-op
-    }
-  }
-
-  await page.keyboard.press("Escape").catch(() => {});
-  await page
-    .locator('.modal[aria-hidden="false"], .modal.in, .modal.show')
-    .waitFor({ state: "hidden", timeout: 8000 })
-    .catch(() => {});
-  await page.waitForTimeout(500);
-}
+const { SimelClient, withTimeout, limpiarArchivoTemporal } = require("./simel-client");
 
 async function listarPendientesSimelInterno(user, pass, { maxItems = 10 } = {}) {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
+  const client = await new SimelClient({ headless: true }).start();
 
   try {
-    await loginYAbrirPendientes(page, user, pass);
-    const filas = await extraerFilasPendientes(page);
-    const seleccion = filas.slice(0, maxItems);
-    const items = [];
-
-    for (let i = 0; i < seleccion.length; i++) {
-      const fila = seleccion[i];
-      await abrirDetallePorIndice(page, fila.rowIndex);
-
-      const detalleCrudo = await extraerDetalleModal(page);
-      const detalle = mapearDetalle(detalleCrudo);
-
-      items.push({
-        ...fila,
-        residuos: detalle.residuos,
-        transportistas: detalle.transportistas
-      });
-
-      await cerrarModal(page);
-      await page.waitForTimeout(300);
-    }
-
-    return {
-      ok: true,
-      total: filas.length,
-      items
-    };
+    await client.loginYAbrirPendientes(user, pass);
+    const { total, items } = await client.listarPendientes({ maxItems });
+    return { ok: true, total, items };
   } catch (error) {
     return {
       ok: false,
@@ -313,149 +15,27 @@ async function listarPendientesSimelInterno(user, pass, { maxItems = 10 } = {}) 
       error: error.message
     };
   } finally {
-    await browser.close();
-  }
-}
-
-async function clickAccionEnModal(page, accion) {
-  const modalVisible = page.locator('.modal[aria-hidden="false"], .modal.in, .modal.show').last();
-  const selectores =
-    accion === "ACEPTAR"
-      ? [
-          modalVisible.locator('button[id^="btn_aceptar_"]').first(),
-          modalVisible.getByRole("button", { name: /^Aceptar$/i }).first()
-        ]
-      : accion === "RECHAZAR"
-        ? [
-            modalVisible.locator('button[id^="btn_rechazar_"]').first(),
-            modalVisible.getByRole("button", { name: /^Rechazar$/i }).first()
-          ]
-        : [
-            modalVisible.locator('button[data-dismiss="modal"]').filter({ hasText: /cancelar/i }).first(),
-            modalVisible.getByRole("button", { name: /^Cancelar$/i }).first()
-          ];
-
-  let boton = null;
-  for (const candidato of selectores) {
-    try {
-      await candidato.waitFor({ state: "visible", timeout: 3000 });
-      boton = candidato;
-      break;
-    } catch {
-      // no-op
-    }
-  }
-
-  if (!boton) {
-    throw new Error(`No se encontro el boton para la accion ${accion}.`);
-  }
-
-  await boton.waitFor({ state: "visible", timeout: 10000 });
-  await boton.scrollIntoViewIfNeeded().catch(() => {});
-  await page.waitForTimeout(300);
-  await boton.focus().catch(() => {});
-  await page.waitForTimeout(200);
-
-  try {
-    await boton.click({ timeout: 10000 });
-  } catch {
-    try {
-      await boton.click({ timeout: 10000, force: true });
-    } catch {
-      await boton.evaluate((el) => {
-        if (el && typeof el.scrollIntoView === "function") {
-          el.scrollIntoView({ block: "center", inline: "center" });
-        }
-        if (el && typeof el.click === "function") {
-          el.click();
-        }
-      });
-    }
-  }
-
-  if (accion !== "CANCELAR") {
-    const confirmadores = [
-      page.getByRole("button", { name: /^Confirmar$/i }).first(),
-      page.getByRole("button", { name: /^Aceptar$/i }).first(),
-      page.getByRole("button", { name: /^Si$/i }).first(),
-      page.getByRole("button", { name: /^S[ií]$/i }).first()
-    ];
-
-    for (const c of confirmadores) {
-      try {
-        await c.waitFor({ state: "visible", timeout: 1500 });
-        await c.click({ timeout: 1500 });
-        break;
-      } catch {
-        // no-op
-      }
-    }
+    await client.close();
   }
 }
 
 async function operarManifiestoSimelInterno(user, pass, { idOperacion, accion }) {
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  let screenshotAntes = "";
-  let screenshotError = "";
+  const client = await new SimelClient({ headless: true }).start();
 
   try {
-    await loginYAbrirPendientes(page, user, pass);
-    const filas = await extraerFilasPendientes(page);
-    const objetivo = filas.find((f) => f.idOperacion === String(idOperacion));
-
-    if (!objetivo) {
-      return {
-        ok: false,
-        accion,
-        idOperacion,
-        error: `No se encontro el manifiesto ${idOperacion} en pendientes.`
-      };
-    }
-
-    await abrirDetallePorIndice(page, objetivo.rowIndex);
-    screenshotAntes = await guardarScreenshotTemporal(
-      page,
-      `simel_previo_${accion}_${idOperacion}`
-    ).catch(() => "");
-    await clickAccionEnModal(page, accion);
-    await page.waitForTimeout(2500);
-
-    const textoPagina = await page.locator("body").innerText().catch(() => "");
-    const aprobado = /manifiesto aprobado/i.test(textoPagina);
-    const rechazado = /manifiesto rechazado/i.test(textoPagina);
-
-    return {
-      ok: true,
-      accion,
-      idOperacion,
-      confirmadoUI: accion === "ACEPTAR" ? aprobado : accion === "RECHAZAR" ? rechazado : true,
-      screenshotAntes
-    };
-  } catch (error) {
-    screenshotError = await guardarScreenshotTemporal(
-      page,
-      `simel_error_${accion}_${idOperacion}`
-    ).catch(() => "");
-    return {
-      ok: false,
-      accion,
-      idOperacion,
-      error: error.message,
-      screenshotAntes,
-      screenshotError
-    };
+    await client.loginYAbrirPendientes(user, pass);
+    return await client.operarManifiesto({ idOperacion, accion });
   } finally {
-    await browser.close();
+    await client.close();
   }
 }
 
 async function listarPendientesSimel(user, pass, options = {}) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout listando pendientes en SIMEL")), 90000)
-  );
-
-  return Promise.race([listarPendientesSimelInterno(user, pass, options), timeout]).catch((err) => ({
+  return withTimeout(
+    () => listarPendientesSimelInterno(user, pass, options),
+    90000,
+    "Timeout listando pendientes en SIMEL"
+  ).catch((err) => ({
     ok: false,
     total: 0,
     items: [],
@@ -464,11 +44,11 @@ async function listarPendientesSimel(user, pass, options = {}) {
 }
 
 async function operarManifiestoSimel(user, pass, payload) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error("Timeout operando manifiesto en SIMEL")), 90000)
-  );
-
-  return Promise.race([operarManifiestoSimelInterno(user, pass, payload), timeout]).catch((err) => ({
+  return withTimeout(
+    () => operarManifiestoSimelInterno(user, pass, payload),
+    90000,
+    "Timeout operando manifiesto en SIMEL"
+  ).catch((err) => ({
     ok: false,
     accion: payload?.accion || "",
     idOperacion: payload?.idOperacion || "",

@@ -34,6 +34,21 @@ const {
 } = require("./airtable");
 
 const { iniciarWorker } = require("./worker");
+const {
+  buscarEmpresasInteligente,
+  parsearJSONSeguro,
+  normalizarTextoPlano,
+  construirListadoRevision,
+  construirDetalleRevision,
+  buscarIndiceManifiesto,
+  resumirErrorPendientesSimel,
+  detectarComando,
+  construirMenu,
+  construirSubmenuManifiestos,
+  construirSubmenuJobs,
+  construirAyudaAprobarEmpresa,
+  construirAyudaConsultarEmpresa
+} = require("./whatsapp-menu");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
