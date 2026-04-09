@@ -152,7 +152,7 @@ async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
     .slice(0, limit);
 }
 
-async function obtenerTodosLosUsuariosSimelPendientes() {
+async function obtenerTodosLosUsuariosSimelPendientes({ soloMarcadosBatch = true } = {}) {
   const records = await base(TABLAS.usuariosSimel)
     .select({
       sort: [{ field: "Empresa", direction: "asc" }]
@@ -168,7 +168,10 @@ async function obtenerTodosLosUsuariosSimelPendientes() {
       activo: !!record.get("Activo"),
       ejecutarBatch: !!record.get("Ejecutar batch")
     }))
-    .filter((r) => r.activo && r.ejecutarBatch);
+    .filter((r) => {
+      if (!r.activo) return false;
+      return soloMarcadosBatch ? r.ejecutarBatch : true;
+    });
 }
 
 async function actualizarResultadoSimel(resultado) {

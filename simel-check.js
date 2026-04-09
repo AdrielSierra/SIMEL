@@ -64,13 +64,25 @@ async function checkSimel(user, pass) {
 
 module.exports = { checkSimel };
 
+function describirResultado(resultado) {
+  const base = `${resultado.usuario || "[sin usuario]"} → ${resultado.estado}`;
+  if (resultado.estado === "SIN_MANIFIESTO") {
+    return `${base}: sin manifiestos (${resultado.filas || 0} filas)`;
+  }
+  if (resultado.estado === "CON_MANIFIESTO") {
+    return `${base}: ${resultado.filas || 0} manifiesto(s) pendientes`;
+  }
+  return `${base}: error -> ${resultado.detalle || resultado.error || "sin detalle"}`;
+}
+
 if (require.main === module) {
   const user = process.env.SIMEL_USER;
   const pass = process.env.SIMEL_PASS;
 
   checkSimel(user, pass)
     .then((resultado) => {
-      console.log(JSON.stringify(resultado, null, 2));
+      console.log("Resultado simel-check:", JSON.stringify(resultado, null, 2));
+      console.log(describirResultado(resultado));
     })
     .catch((err) => {
       console.error("Error general:", err);

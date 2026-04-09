@@ -145,6 +145,24 @@ class SimelClient {
     });
   }
 
+  async refrescarPendientes() {
+    const botonBuscar = this.page.getByRole("button", { name: /buscar/i }).first();
+    try {
+      if (await botonBuscar.isVisible({ timeout: 2000 })) {
+        await botonBuscar.click({ timeout: 5000 });
+        await this.page.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => {});
+        await this.page.waitForTimeout(1500);
+        return;
+      }
+    } catch {
+      // no-op
+    }
+
+    await this.page.reload({ waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+    await this.page.waitForTimeout(2000);
+    await this.abrirPendientes().catch(() => {});
+  }
+
   async contarPendientes() {
     const sinResultados = await this.sinResultadosPendientes();
     if (sinResultados) return 0;
@@ -313,6 +331,7 @@ class SimelClient {
         ok: false,
         accion,
         idOperacion,
+        estadoVerificacion: "NO_ENCONTRADO_EN_PENDIENTES",
         error: `No se encontro el manifiesto ${idOperacion} en pendientes.`
       };
     }
@@ -353,12 +372,21 @@ class SimelClient {
       }
 
       await this.page.waitForTimeout(2500);
-      const pendientesDespues = await this.contarPendientes();
-      const siguePresente = (await this.extraerFilasPendientes()).some((f) => f.idOperacion === String(idOperacion));
+      const pendientesAntesRefresh = await this.contarPendientes();
+      const siguePresenteAntesRefresh = (await this.extraerFilasPendientes()).some((f) => f.idOperacion === String(idOperacion));
       const textoPagina = await this.page.locator("body").innerText().catch(() => "");
       const confirmacionTexto = accion === "ACEPTAR"
         ? /manifiesto aprobado|aprobado/i.test(textoPagina)
         : /manifiesto rechazado|rechazado/i.test(textoPagina);
+
+      let pendientesDespues = pendientesAntesRefresh;
+      let siguePresente = siguePresenteAntesRefresh;
+
+      if (confirmacionTexto || siguePresenteAntesRefresh) {
+        await this.refrescarPendientes().catch(() => {});
+        pendientesDespues = await this.contarPendientes();
+        siguePresente = (await this.extraerFilasPendientes()).some((f) => f.idOperacion === String(idOperacion));
+      }
 
       const confirmadoUI = confirmacionTexto || !siguePresente;
 
@@ -366,7 +394,9 @@ class SimelClient {
         ok: confirmadoUI,
         accion,
         idOperacion,
+        estadoVerificacion: confirmadoUI ? "CONFIRMADO_EN_PENDIENTES" : "NO_CONFIRMADO",
         confirmadoUI,
+        pendientesAntesRefresh,
         pendientesDespues,
         screenshotAntes,
         error: confirmadoUI ? "" : `No pude confirmar por UI que ${idOperacion} fue ${accion.toLowerCase()}.`
@@ -396,5 +426,6 @@ module.exports = {
   SimelClient,
   withTimeout,
   limpiarArchivoTemporal,
-  guardarScreenshotTemporal
+  guardarScreenshotTemporal,
+  normalizarTexto
 };

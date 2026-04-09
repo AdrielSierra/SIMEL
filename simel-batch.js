@@ -1,9 +1,23 @@
 const { checkSimel } = require("./simel-check");
 
+function logResultado(resultado) {
+  const contexto = `${resultado.empresa || "[sin empresa]"} (${resultado.usuario || "sin usuario"})`;
+
+  if (resultado.estado === "SIN_MANIFIESTO") {
+    console.log(`✅ ${contexto}: sin manifiestos (${resultado.filas || 0} filas)`);
+  } else if (resultado.estado === "CON_MANIFIESTO") {
+    console.log(`⚠️ ${contexto}: ${resultado.filas || "?"} pendientes — ${resultado.detalle || "n/d"}`);
+  } else {
+    console.log(`❌ ${contexto}: error -> ${resultado.detalle || resultado.error || "n/d"}`);
+  }
+}
+
 async function runBatch({ usuarios, onResultado }) {
   if (!Array.isArray(usuarios) || usuarios.length === 0) {
     throw new Error("Falta el array de usuarios");
   }
+
+  console.log(`Iniciando batch con ${usuarios.length} empresas`);
 
   const resumen = {
     ok: true,
@@ -52,7 +66,8 @@ async function runBatch({ usuarios, onResultado }) {
       resumen.empresasConManifiesto.push({
         empresa: resultado.empresa,
         usuario: resultado.usuario,
-        filas: resultado.filas
+        filas: resultado.filas || 0,
+        detalle: resultado.detalle || ""
       });
     } else if (resultado.estado === "SIN_MANIFIESTO") {
       resumen.cantidadSinManifiesto++;
@@ -65,14 +80,24 @@ async function runBatch({ usuarios, onResultado }) {
       resumen.empresasConError.push({
         empresa: resultado.empresa,
         usuario: resultado.usuario,
-        detalle: resultado.detalle
+        detalle: resultado.detalle || resultado.error || ""
       });
     }
+
+    logResultado(resultado);
 
     if (typeof onResultado === "function") {
       await onResultado(resultado);
     }
   }
+
+  console.log("Batch terminado", {
+    total: resumen.total,
+    revisados: resumen.revisados,
+    conManifiesto: resumen.cantidadConManifiesto,
+    sinManifiesto: resumen.cantidadSinManifiesto,
+    conError: resumen.cantidadConError
+  });
 
   return resumen;
 }
