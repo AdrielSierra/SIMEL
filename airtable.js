@@ -3,9 +3,21 @@ require("./env-loader");
 const Airtable = require("airtable");
 const supabaseStore = require("./supabase-store");
 
-const base = new Airtable({
-  apiKey: process.env.AIRTABLE_TOKEN
-}).base(process.env.AIRTABLE_BASE_ID);
+let airtableBase = null;
+
+function getBase() {
+  if (airtableBase) return airtableBase;
+
+  if (!process.env.AIRTABLE_TOKEN || !process.env.AIRTABLE_BASE_ID) {
+    throw new Error("Airtable no configurado. Faltan AIRTABLE_TOKEN y/o AIRTABLE_BASE_ID");
+  }
+
+  airtableBase = new Airtable({
+    apiKey: process.env.AIRTABLE_TOKEN
+  }).base(process.env.AIRTABLE_BASE_ID);
+
+  return airtableBase;
+}
 
 const TABLAS = {
   usuariosSimel: process.env.AIRTABLE_TABLE_NAME || "Usuarios_SIMEL",
@@ -136,7 +148,7 @@ function normalizarEstadoSesionAirtable(valor = "") {
 }
 
 async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
-  const records = await base(TABLAS.usuariosSimel)
+  const records = await getBase()(TABLAS.usuariosSimel)
     .select({
       sort: [{ field: "Empresa", direction: "asc" }]
     })
@@ -156,7 +168,7 @@ async function obtenerUsuariosSimelActivos({ limit = 5 } = {}) {
 }
 
 async function obtenerTodosLosUsuariosSimelPendientes({ soloMarcadosBatch = true } = {}) {
-  const records = await base(TABLAS.usuariosSimel)
+  const records = await getBase()(TABLAS.usuariosSimel)
     .select({
       sort: [{ field: "Empresa", direction: "asc" }]
     })
@@ -180,7 +192,7 @@ async function obtenerTodosLosUsuariosSimelPendientes({ soloMarcadosBatch = true
 async function actualizarResultadoSimel(resultado) {
   if (!resultado.recordId) return;
 
-  await base(TABLAS.usuariosSimel).update([
+  await getBase()(TABLAS.usuariosSimel).update([
     {
       id: resultado.recordId,
       fields: {
@@ -197,7 +209,7 @@ async function actualizarResultadoSimel(resultado) {
 async function crearJobSimel({ totalEmpresas, disparadoPor = "Sistema", detalle = "" }) {
   const jobId = `JOB-${Date.now()}`;
 
-  const created = await base(TABLAS.jobsSimel).create([
+  const created = await getBase()(TABLAS.jobsSimel).create([
     {
       fields: {
         "Job ID": jobId,
@@ -221,7 +233,7 @@ async function crearJobSimel({ totalEmpresas, disparadoPor = "Sistema", detalle 
 }
 
 async function buscarJobPendiente() {
-  const records = await base(TABLAS.jobsSimel)
+  const records = await getBase()(TABLAS.jobsSimel)
     .select({
       filterByFormula: `{Estado}="Pendiente"`,
       maxRecords: 1,
@@ -246,7 +258,7 @@ async function buscarJobPendiente() {
 }
 
 async function buscarJobPendienteOEnProceso() {
-  const records = await base(TABLAS.jobsSimel)
+  const records = await getBase()(TABLAS.jobsSimel)
     .select({
       filterByFormula: `OR({Estado}="Pendiente", {Estado}="En proceso")`,
       maxRecords: 1,
@@ -271,7 +283,7 @@ async function buscarJobPendienteOEnProceso() {
 }
 
 async function actualizarJobSimel(airtableRecordId, fields) {
-  await base(TABLAS.jobsSimel).update([
+  await getBase()(TABLAS.jobsSimel).update([
     {
       id: airtableRecordId,
       fields
@@ -280,7 +292,7 @@ async function actualizarJobSimel(airtableRecordId, fields) {
 }
 
 async function crearDetalleJobSimel({ jobRecordId, jobIdTexto, resultado }) {
-  await base(TABLAS.jobsSimelDetalle).create([
+  await getBase()(TABLAS.jobsSimelDetalle).create([
     {
       fields: {
         "Job": [jobRecordId],
@@ -298,7 +310,7 @@ async function crearDetalleJobSimel({ jobRecordId, jobIdTexto, resultado }) {
 }
 
 async function obtenerJobPorTexto(jobId) {
-  const records = await base(TABLAS.jobsSimel)
+  const records = await getBase()(TABLAS.jobsSimel)
     .select({
       filterByFormula: `{Job ID}="${escaparFormula(jobId)}"`,
       maxRecords: 1
@@ -326,7 +338,7 @@ async function obtenerJobPorTexto(jobId) {
 }
 
 async function obtenerDetallesJobSimel(jobId) {
-  const records = await base(TABLAS.jobsSimelDetalle)
+  const records = await getBase()(TABLAS.jobsSimelDetalle)
     .select({
       filterByFormula: `{Job ID Texto}="${escaparFormula(jobId)}"`,
       sort: [{ field: "Empresa", direction: "asc" }]
@@ -347,7 +359,7 @@ async function obtenerDetallesJobSimel(jobId) {
 }
 
 async function obtenerUltimoJobSimel() {
-  const records = await base(TABLAS.jobsSimel)
+  const records = await getBase()(TABLAS.jobsSimel)
     .select({
       sort: [{ field: "Inicio", direction: "desc" }],
       maxRecords: 1
@@ -381,7 +393,7 @@ async function buscarAutorizadoWhatsApp(telefono) {
 
   const telefonoNormalizado = normalizarTelefono(telefono);
 
-  const records = await base(TABLAS.whatsappAutorizados)
+  const records = await getBase()(TABLAS.whatsappAutorizados)
     .select({
       filterByFormula: `OR({Teléfono normalizado}="${escaparFormula(telefonoNormalizado)}",{Teléfono}="${escaparFormula(telefonoNormalizado)}",{Teléfono}="${escaparFormula(telefono)}")`,
       maxRecords: 1
@@ -418,7 +430,7 @@ async function actualizarUltimaInteraccionWhatsApp(airtableRecordId, ultimoComan
 
   if (!airtableRecordId) return;
 
-  await base(TABLAS.whatsappAutorizados).update([
+  await getBase()(TABLAS.whatsappAutorizados).update([
     {
       id: airtableRecordId,
       fields: limpiarCampos({
@@ -487,7 +499,7 @@ async function crearLogWhatsApp({
   });
 
   try {
-    await base(TABLAS.whatsappLog).create([{ fields }]);
+    await getBase()(TABLAS.whatsappLog).create([{ fields }]);
   } catch (error) {
     console.error("[Airtable] Error creando WhatsApp_Log:", error.message);
   }
@@ -495,7 +507,7 @@ async function crearLogWhatsApp({
 
 async function obtenerMenuWhatsApp() {
   try {
-    const records = await base(TABLAS.whatsappMenu)
+    const records = await getBase()(TABLAS.whatsappMenu)
       .select({
         filterByFormula: `{Activo}=1`,
         sort: [{ field: "Orden", direction: "asc" }]
@@ -523,7 +535,7 @@ async function obtenerMenuWhatsApp() {
 
 async function obtenerConfigWhatsApp(clave) {
   try {
-    const records = await base(TABLAS.whatsappConfig)
+    const records = await getBase()(TABLAS.whatsappConfig)
       .select({
         filterByFormula: `{Clave}="${escaparFormula(clave)}"`,
         maxRecords: 1
@@ -564,7 +576,7 @@ async function registrarManifiestoPendienteSimel({ jobRecordId, jobIdTexto, resu
   });
 
   try {
-    await base(TABLAS.simelPendientes).create([{ fields }]);
+    await getBase()(TABLAS.simelPendientes).create([{ fields }]);
   } catch (error) {
     console.error("[Airtable] Error creando SIMEL_Manifiestos_Pendientes:", error.message);
   }
@@ -573,7 +585,7 @@ async function registrarManifiestoPendienteSimel({ jobRecordId, jobIdTexto, resu
 async function listarManifiestosPendientesActivos({ limit = 10 } = {}) {
   const formula = `AND({Activo}=1,OR({Estado pendiente}="Pendiente de revisión",{Estado pendiente}="Pendiente de aprobación",{Estado pendiente}="Aprobación solicitada"))`;
 
-  const records = await base(TABLAS.simelPendientes)
+  const records = await getBase()(TABLAS.simelPendientes)
     .select({
       filterByFormula: formula,
       sort: [{ field: "Fecha detección", direction: "desc" }],
@@ -599,7 +611,7 @@ async function listarEmpresasSimel({ soloActivas = true } = {}) {
     return supabaseStore.listarEmpresasSimel({ soloActivas });
   }
 
-  const records = await base(TABLAS.usuariosSimel)
+  const records = await getBase()(TABLAS.usuariosSimel)
     .select({
       fields: ["Empresa", "Activo"],
       sort: [{ field: "Empresa", direction: "asc" }]
@@ -626,7 +638,7 @@ async function listarEmpresasSimel({ soloActivas = true } = {}) {
 async function listarPendientesPorEmpresa(nombreEmpresa) {
   const formula = `AND({Activo}=1,OR({Estado pendiente}="Pendiente de revisión",{Estado pendiente}="Pendiente de aprobación",{Estado pendiente}="Aprobación solicitada"))`;
 
-  const records = await base(TABLAS.simelPendientes)
+  const records = await getBase()(TABLAS.simelPendientes)
     .select({
       filterByFormula: formula,
       sort: [{ field: "Fecha detección", direction: "desc" }]
@@ -653,7 +665,7 @@ async function listarPendientesPorEmpresa(nombreEmpresa) {
 async function buscarSesionWhatsAppRecord(telefono) {
   const telefonoNormalizado = normalizarTelefono(telefono);
 
-  const records = await base(TABLAS.whatsappSesiones)
+  const records = await getBase()(TABLAS.whatsappSesiones)
     .select({
       filterByFormula: `{Teléfono}="${escaparFormula(telefonoNormalizado)}"`,
       maxRecords: 1,
@@ -740,7 +752,7 @@ async function guardarSesionWhatsApp({
   });
 
   if (existente) {
-    await base(TABLAS.whatsappSesiones).update([
+    await getBase()(TABLAS.whatsappSesiones).update([
       {
         id: existente.id,
         fields
@@ -750,7 +762,7 @@ async function guardarSesionWhatsApp({
     return existente.id;
   }
 
-  const created = await base(TABLAS.whatsappSesiones).create([{ fields }]);
+  const created = await getBase()(TABLAS.whatsappSesiones).create([{ fields }]);
   return created[0].id;
 }
 
@@ -762,7 +774,7 @@ async function cerrarSesionWhatsApp(telefono) {
   const existente = await buscarSesionWhatsAppRecord(telefono);
   if (!existente) return;
 
-  await base(TABLAS.whatsappSesiones).update([
+  await getBase()(TABLAS.whatsappSesiones).update([
     {
       id: existente.id,
       fields: {
@@ -789,7 +801,7 @@ async function crearAprobacionSimel({ empresaNombre, pendienteRecordId, solicita
   });
 
   try {
-    const created = await base(TABLAS.aprobaciones).create([{ fields }]);
+    const created = await getBase()(TABLAS.aprobaciones).create([{ fields }]);
     return {
       airtableRecordId: created[0].id,
       token
@@ -802,7 +814,7 @@ async function crearAprobacionSimel({ empresaNombre, pendienteRecordId, solicita
 
 async function buscarAprobacionPorToken(token) {
   try {
-    const records = await base(TABLAS.aprobaciones)
+    const records = await getBase()(TABLAS.aprobaciones)
       .select({
         filterByFormula: `AND({Token confirmación}="${escaparFormula(token)}",{Estado}="Pendiente confirmación")`,
         maxRecords: 1
@@ -838,7 +850,7 @@ async function actualizarEstadoAprobacion(airtableRecordId, { estado, fechaEjecu
   });
 
   try {
-    await base(TABLAS.aprobaciones).update([
+    await getBase()(TABLAS.aprobaciones).update([
       {
         id: airtableRecordId,
         fields
@@ -851,7 +863,7 @@ async function actualizarEstadoAprobacion(airtableRecordId, { estado, fechaEjecu
 
 async function obtenerAprobacionesPendientesConfirmacion() {
   try {
-    const records = await base(TABLAS.aprobaciones)
+    const records = await getBase()(TABLAS.aprobaciones)
       .select({
         filterByFormula: `{Estado}="Pendiente confirmación"`,
         sort: [{ field: "Fecha solicitud", direction: "desc" }]
@@ -878,7 +890,7 @@ async function obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit = 5) {
   }
 
   try {
-    const records = await base(TABLAS.aprobaciones)
+    const records = await getBase()(TABLAS.aprobaciones)
       .select({
         filterByFormula: `{Empresa}="${escaparFormula(nombreEmpresa)}"`,
         sort: [{ field: "Fecha solicitud", direction: "desc" }],
@@ -907,7 +919,7 @@ async function obtenerDatosEmpresaSimel(nombreEmpresa) {
   }
 
   try {
-    const records = await base(TABLAS.usuariosSimel)
+    const records = await getBase()(TABLAS.usuariosSimel)
       .select({
         filterByFormula: `{Empresa}="${escaparFormula(nombreEmpresa)}"`,
         maxRecords: 1,
@@ -948,7 +960,7 @@ async function marcarEmpresasParaReintentar(recordIds) {
     // Airtable permite máximo 10 updates por batch
     for (let i = 0; i < updates.length; i += 10) {
       const batch = updates.slice(i, i + 10);
-      await base(TABLAS.usuariosSimel).update(batch);
+      await getBase()(TABLAS.usuariosSimel).update(batch);
     }
 
     console.log(`[Airtable] Marcadas ${recordIds.length} empresa(s) para reintentar`);
@@ -959,7 +971,7 @@ async function marcarEmpresasParaReintentar(recordIds) {
 
 async function obtenerAdminsWhatsApp() {
   try {
-    const records = await base(TABLAS.whatsappAutorizados)
+    const records = await getBase()(TABLAS.whatsappAutorizados)
       .select({
         filterByFormula: `AND({Activo}=1,{Rol}="Admin")`,
         fields: ["Teléfono", "Teléfono normalizado", "Nombre"]
@@ -984,7 +996,7 @@ async function obtenerUsuarioSimelPorEmpresa(nombreEmpresa) {
   }
 
   try {
-    const records = await base(TABLAS.usuariosSimel)
+    const records = await getBase()(TABLAS.usuariosSimel)
       .select({
         filterByFormula: `{Empresa}="${escaparFormula(nombreEmpresa)}"`,
         maxRecords: 1,
