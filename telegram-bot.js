@@ -1,4 +1,8 @@
 require("./env-loader");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
+
+const execFileAsync = promisify(execFile);
 
 const {
   buscarAutorizadoTelegram,
@@ -20,24 +24,50 @@ function getTelegramApiUrl(method) {
   return `https://api.telegram.org/bot${token}/${method}`;
 }
 
-async function sendTelegramText(chatId, text) {
-  const response = await fetch(getTelegramApiUrl("sendMessage"), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text || "Sin respuesta"
-    })
-  });
+async function postTelegramApi(method, payload) {
+  const url = getTelegramApiUrl(method);
 
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data.ok === false) {
-    throw new Error(`Telegram sendMessage error: ${response.status} - ${JSON.stringify(data)}`);
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) {
+      throw new Error(`Telegram ${method} error: ${response.status} - ${JSON.stringify(data)}`);
+    }
+
+    return data;
+  } catch (fetchError) {
+    const { stdout } = await execFileAsync("curl", [
+      "-sS",
+      "-X",
+      "POST",
+      url,
+      "-H",
+      "Content-Type: application/json",
+      "-d",
+      JSON.stringify(payload)
+    ]);
+
+    const data = JSON.parse(stdout || "{}");
+    if (data.ok === false) {
+      throw new Error(`Telegram ${method} error via curl: ${JSON.stringify(data)}`);
+    }
+
+    return data;
   }
+}
 
-  return data;
+async function sendTelegramText(chatId, text) {
+  return postTelegramApi("sendMessage", {
+    chat_id: chatId,
+    text: text || "Sin respuesta"
+  });
 }
 
 function sanitizeOutgoingText(text = "") {
