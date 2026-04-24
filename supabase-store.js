@@ -84,6 +84,27 @@ async function listarEmpresasSimel({ soloActivas = true } = {}) {
     .filter(Boolean);
 }
 
+async function listarUsuariosSimelActivos() {
+  const rows = await supabaseRequest("/rest/v1/credenciales_simel", {
+    query: {
+      select: "id,usuario_simel,password_cifrada,activo,empresa:empresa_id(id,nombre,activa)",
+      activo: "eq.true",
+      order: "updated_at.desc"
+    }
+  });
+
+  return (rows || [])
+    .filter((row) => row?.empresa?.activa)
+    .map((row) => ({
+      recordId: row.id,
+      empresa: row.empresa?.nombre || "",
+      usuario: row.usuario_simel || "",
+      password: decryptText(row.password_cifrada || ""),
+      activo: !!row.activo
+    }))
+    .filter((row) => row.empresa && row.usuario && row.password);
+}
+
 async function buscarAutorizadoWhatsApp(telefono) {
   const telefonoNormalizado = normalizarTelefono(telefono);
   const rows = await supabaseRequest("/rest/v1/usuarios_chat", {
@@ -474,6 +495,7 @@ module.exports = {
   isSupabaseEnabled,
   obtenerUsuarioSimelPorEmpresa,
   listarEmpresasSimel,
+  listarUsuariosSimelActivos,
   buscarAutorizadoWhatsApp,
   buscarAutorizadoTelegram,
   actualizarUltimaInteraccionWhatsApp,
