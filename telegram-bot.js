@@ -96,22 +96,18 @@ function normalizeTelegramText(text = "") {
   const normalizedPlain = raw.toLowerCase();
 
   if (/^0(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "0") {
-    return "menu";
-  }
-
-  if (/^1(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "1") {
-    return "manifiestos pendientes";
-  }
-
-  if (/^2(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "2") {
-    return "buscar empresa";
-  }
-
-  if (/^3(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "3") {
     return "mi perfil";
   }
 
-  if (/^4(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "4") {
+  if (/^1(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "1") {
+    return "ayuda consultar empresa";
+  }
+
+  if (/^2(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "2") {
+    return "ayuda aprobar empresa";
+  }
+
+  if (/^3(\b|[.) -])/.test(normalizedPlain) || normalizedPlain === "3") {
     return "simel start";
   }
 
@@ -119,20 +115,24 @@ function normalizeTelegramText(text = "") {
     return "menu";
   }
 
-  if (["ver pendientes", "empresas con pendientes", "1. ver pendientes"].includes(normalizedPlain)) {
-    return "manifiestos pendientes";
+  if (
+    ["consultar manifiestos empresa", "consultar empresa", "buscar empresa", "1. consultar manifiestos empresa"].includes(normalizedPlain)
+  ) {
+    return "ayuda consultar empresa";
   }
 
-  if (["consultar empresa", "buscar empresa", "2. consultar empresa"].includes(normalizedPlain)) {
-    return "buscar empresa";
+  if (
+    ["aprobar manifiesto empresa", "aprobar empresa", "2. aprobar manifiesto empresa"].includes(normalizedPlain)
+  ) {
+    return "ayuda aprobar empresa";
   }
 
-  if (["mi perfil", "3. mi perfil"].includes(normalizedPlain)) {
+  if (["mi perfil", "perfil", "0. perfil"].includes(normalizedPlain)) {
     return "mi perfil";
   }
 
   if (
-    ["ejecutar batch", "4. ejecutar batch"].includes(normalizedPlain) ||
+    ["ejecutar batch", "3. ejecutar batch"].includes(normalizedPlain) ||
     /^ejecutar bat/i.test(normalizedPlain)
   ) {
     return "simel start";
@@ -155,13 +155,14 @@ function normalizeTelegramText(text = "") {
 }
 
 function buildMainKeyboard(contacto) {
-  const keyboard = [[{ text: "1. Ver pendientes" }, { text: "2. Consultar empresa" }]];
+  const keyboard = [
+    [{ text: "0. Perfil" }, { text: "1. Consultar manifiestos empresa" }],
+    [{ text: "2. Aprobar manifiesto empresa" }]
+  ];
 
   if (contacto?.puedeEjecutarBatch) {
-    keyboard.push([{ text: "4. Ejecutar batch" }]);
+    keyboard.push([{ text: "3. Ejecutar batch" }]);
   }
-
-  keyboard.push([{ text: "3. Mi perfil" }, { text: "0. Menu" }]);
 
   return {
     keyboard,
@@ -175,7 +176,7 @@ function buildSuggestionsKeyboard(coincidencias = [], contacto) {
     .slice(0, 4)
     .map((item) => [{ text: `/empresa ${item.empresa}` }]);
 
-  rows.push([{ text: "🏠 Menu" }]);
+  rows.push([{ text: "0. Perfil" }]);
 
   return {
     keyboard: rows.length ? rows : buildMainKeyboard(contacto).keyboard,
@@ -285,16 +286,16 @@ async function buildTelegramResponse({ contacto, comando }) {
       "",
       "Puedes elegir una opcion del teclado o responder con un numero.",
       "",
-      "1. Ver pendientes",
-      "2. Consultar empresa",
-      "3. Mi perfil"
+      "0. Perfil",
+      "1. Consultar manifiestos empresa",
+      "2. Aprobar manifiesto empresa"
     ];
 
     if (contacto?.puedeEjecutarBatch) {
-      lineas.push("4. Ejecutar batch");
+      lineas.push("3. Ejecutar batch");
     }
 
-    lineas.push("", "Tambien puedes escribir:", "/empresa COLON", "0. Menu");
+    lineas.push("", "Tambien puedes escribir:", "/empresa COLON", "aprobar empresa COLON", "/menu");
 
     return {
       text: lineas.join("\n"),
@@ -305,11 +306,11 @@ async function buildTelegramResponse({ contacto, comando }) {
   if (comando.codigo === "MENU_MANIFIESTOS") {
     return {
       text:
-        "📋 Manifiestos\n\n" +
-        "Puedes revisar que empresas tienen pendientes y consultar una puntual.\n\n" +
+        "📋 Manifiestos por empresa\n\n" +
+        "Puedes consultar una empresa puntual o pedir una aprobacion.\n\n" +
         "Prueba con:\n" +
-        "1. Ver pendientes\n" +
-        "2. Consultar empresa\n" +
+        "1. Consultar manifiestos empresa\n" +
+        "2. Aprobar manifiesto empresa\n" +
         "/empresa COLON",
       replyMarkup: buildMainKeyboard(contacto)
     };
@@ -322,7 +323,19 @@ async function buildTelegramResponse({ contacto, comando }) {
         "/empresa COLON\n" +
         "/empresa TERGEN\n\n" +
         "Tambien puedes escribir solo una parte del nombre y te sugiero coincidencias.\n\n" +
-        "Para volver al menu: 0",
+        "Para volver al menu principal: /menu",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "APROBAR_EMPRESA_AYUDA") {
+    return {
+      text:
+        "✅ Para aprobar una empresa, escribe por ejemplo:\n\n" +
+        "aprobar empresa COLON\n" +
+        "aprobar empresa TERGEN\n\n" +
+        "Si escribes solo una parte del nombre, te ayudare a encontrarla.\n\n" +
+        "Para volver al menu principal: /menu",
       replyMarkup: buildMainKeyboard(contacto)
     };
   }
@@ -387,11 +400,11 @@ async function buildTelegramResponse({ contacto, comando }) {
 
     if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
       return {
-      text:
-        `🤔 Encontre ${coincidencias.length} empresa(s) parecida(s):\n\n` +
+        text:
+          `🤔 Encontre ${coincidencias.length} empresa(s) parecida(s):\n\n` +
           coincidencias.map((item, idx) => `${idx + 1}. ${item.empresa}`).join("\n") +
           "\n\nToca una sugerencia o escribe /empresa NOMBRE_EXACTO.\n" +
-          "Para volver al menu: 0.",
+          "Para volver al menu principal: /menu.",
         replyMarkup: buildSuggestionsKeyboard(coincidencias, contacto)
       };
     }
@@ -412,17 +425,17 @@ async function buildTelegramResponse({ contacto, comando }) {
     }
 
     return {
-      text:
-        `🏢 ${empresa}\n\n` +
-        "Estado: con manifiestos pendientes\n" +
-        `Total: ${total}\n\n` +
-        `Ultimo check: ${datos?.ultimoCheck || "Sin datos"}\n` +
-        `Ultimo estado: ${datos?.ultimoEstado || "Sin datos"}\n` +
-        `Detalle: ${datos?.ultimoDetalle || "Sin detalle"}\n\n` +
-        `Si quieres aprobarla, escribe: aprobar empresa ${empresa}\n` +
-        "Para volver al menu: 0",
-      replyMarkup: buildMainKeyboard(contacto)
-    };
+        text:
+          `🏢 ${empresa}\n\n` +
+          "Estado: con manifiestos pendientes\n" +
+          `Total: ${total}\n\n` +
+          `Ultimo check: ${datos?.ultimoCheck || "Sin datos"}\n` +
+          `Ultimo estado: ${datos?.ultimoEstado || "Sin datos"}\n` +
+          `Detalle: ${datos?.ultimoDetalle || "Sin detalle"}\n\n` +
+          `Si quieres aprobarla, escribe: aprobar empresa ${empresa}\n` +
+          "Para volver al menu principal: /menu",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
   }
 
   if (comando.codigo === "MI_PERFIL") {
@@ -450,7 +463,7 @@ async function buildTelegramResponse({ contacto, comando }) {
     return {
       text:
         "🚀 El batch ya esta disponible para admins.\n\n" +
-        "Si envias 4 o tocas '4. Ejecutar batch', voy a lanzar la revision y te envio el resumen cuando termine.",
+        "Si envias 3 o tocas '3. Ejecutar batch', voy a lanzar la revision y te envio el resumen cuando termine.",
       replyMarkup: buildMainKeyboard(contacto)
     };
   }
@@ -459,10 +472,10 @@ async function buildTelegramResponse({ contacto, comando }) {
     text:
       "No entendi ese mensaje.\n\n" +
       "Prueba con una de estas opciones:\n" +
-      "1. Ver pendientes\n" +
-      "2. Consultar empresa\n" +
-      "3. Mi perfil\n" +
-      "0. Menu\n\n" +
+      "0. Perfil\n" +
+      "1. Consultar manifiestos empresa\n" +
+      "2. Aprobar manifiesto empresa\n" +
+      "3. Ejecutar batch (solo admin)\n\n" +
       "O escribe: /empresa COLON",
     replyMarkup: buildMainKeyboard(contacto)
   };
@@ -526,7 +539,15 @@ async function handleTelegramWebhook(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    const comando = detectarComando(incomingText || "menu");
+    let comando;
+
+    if (incomingText === "ayuda consultar empresa") {
+      comando = { codigo: "BUSCAR_EMPRESA_AYUDA" };
+    } else if (incomingText === "ayuda aprobar empresa") {
+      comando = { codigo: "APROBAR_EMPRESA_AYUDA" };
+    } else {
+      comando = detectarComando(incomingText || "menu");
+    }
     await actualizarUltimaInteraccionWhatsApp(contacto.airtableRecordId, comando.codigo);
 
     if (comando.codigo === "SIMEL_START") {
