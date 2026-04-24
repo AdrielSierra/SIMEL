@@ -70,18 +70,48 @@ async function sendTelegramText(chatId, text) {
   });
 }
 
+async function sendTelegramMessage(chatId, text, extra = {}) {
+  return postTelegramApi("sendMessage", {
+    chat_id: chatId,
+    text: text || "Sin respuesta",
+    ...extra
+  });
+}
+
 function sanitizeOutgoingText(text = "") {
   return String(text || "")
     .replace(/\*/g, "")
     .replace(/_/g, "")
     .replace(/`/g, "")
-    .replace(/â€¢/g, "-")
-    .replace(/ðŸ/g, "");
+    .replace(/Ã¢â‚¬Â¢/g, "-")
+    .replace(/Ã°Å¸/g, "");
 }
 
 function normalizeTelegramText(text = "") {
   const raw = String(text || "").trim();
   if (!raw) return "";
+
+  const normalizedPlain = raw.toLowerCase();
+
+  if (["menu", "inicio", "volver al menu"].includes(normalizedPlain)) {
+    return "menu";
+  }
+
+  if (["ver pendientes", "empresas con pendientes"].includes(normalizedPlain)) {
+    return "manifiestos pendientes";
+  }
+
+  if (["consultar empresa", "buscar empresa"].includes(normalizedPlain)) {
+    return "buscar empresa";
+  }
+
+  if (normalizedPlain === "mi perfil") {
+    return "mi perfil";
+  }
+
+  if (normalizedPlain === "ejecutar batch") {
+    return "simel start";
+  }
 
   const simpleSlash = raw.match(/^\/([a-z_]+)(?:@\w+)?(?:\s+(.*))?$/i);
   if (!simpleSlash) return raw;
@@ -99,39 +129,90 @@ function normalizeTelegramText(text = "") {
   return raw;
 }
 
-async function buildTelegramResponse({ contacto, comando, text }) {
+function buildMainKeyboard(contacto) {
+  const keyboard = [
+    [{ text: "Ver pendientes" }, { text: "Consultar empresa" }],
+    [{ text: "Mi perfil" }, { text: "Menu" }]
+  ];
+
+  if (contacto?.puedeEjecutarBatch) {
+    keyboard.splice(1, 0, [{ text: "Ejecutar batch" }]);
+  }
+
+  return {
+    keyboard,
+    resize_keyboard: true,
+    persistent_keyboard: true
+  };
+}
+
+function buildSuggestionsKeyboard(coincidencias = [], contacto) {
+  const rows = coincidencias
+    .slice(0, 4)
+    .map((item) => [{ text: `/empresa ${item.empresa}` }]);
+
+  rows.push([{ text: "Menu" }]);
+
+  return {
+    keyboard: rows.length ? rows : buildMainKeyboard(contacto).keyboard,
+    resize_keyboard: true,
+    persistent_keyboard: true
+  };
+}
+
+async function buildTelegramResponse({ contacto, comando }) {
   if (comando.codigo === "MENU") {
     const lineas = [
-      "Menu principal",
+      "Simelito",
       "",
-      "1. Ver empresas con pendientes -> /pendientes",
-      "2. Consultar una empresa -> /empresa NOMBRE",
-      "3. Mi perfil -> /perfil"
+      "Que quieres hacer?",
+      "",
+      "1. Ver empresas con pendientes",
+      "2. Consultar una empresa",
+      "3. Ver tu perfil"
     ];
 
     if (contacto?.puedeEjecutarBatch) {
-      lineas.push("4. Ejecutar batch -> simel start");
+      lineas.push("4. Ejecutar batch");
     }
 
-    return lineas.join("\n");
+    lineas.push("", "Tambien puedes escribir:", "/pendientes", "/empresa COLON", "/perfil");
+
+    return {
+      text: lineas.join("\n"),
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
   if (comando.codigo === "MENU_MANIFIESTOS") {
-    return (
-      "Submenu Manifiestos\n\n" +
-      "1. Ver empresas con pendientes -> /pendientes\n" +
-      "2. Consultar una empresa -> /empresa NOMBRE\n" +
-      "3. Aprobar una empresa -> aprobar empresa NOMBRE"
-    );
+    return {
+      text:
+        "Manifiestos\n\n" +
+        "1. Ver empresas con pendientes\n" +
+        "2. Consultar una empresa\n" +
+        "3. Aprobar una empresa\n\n" +
+        "Prueba con: /pendientes o /empresa COLON",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
   if (comando.codigo === "BUSCAR_EMPRESA_AYUDA") {
-    return "Escribe /empresa NOMBRE para consultar una empresa.";
+    return {
+      text:
+        "Para consultar una empresa, escribe por ejemplo:\n\n" +
+        "/empresa COLON\n" +
+        "/empresa TERGEN\n\n" +
+        "Si quieres, escribe solo una parte del nombre y te sugiero coincidencias.",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
   if (comando.codigo === "MANIFIESTOS_PENDIENTES") {
     if (!contacto.puedeVerManifiestosPendientes) {
-      return "No tienes permiso para ver manifiestos pendientes.";
+      return {
+        text: "No tienes permiso para ver manifiestos pendientes.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
     const empresas = await listarEmpresasSimel({ soloActivas: true });
@@ -146,31 +227,51 @@ async function buildTelegramResponse({ contacto, comando, text }) {
     }
 
     if (!resumen.length) {
-      return "No hay empresas con manifiestos pendientes.";
+      return {
+        text:
+          "No hay empresas con manifiestos pendientes ahora.\n\n" +
+          "Puedes consultar una empresa puntual con /empresa NOMBRE.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
-    return `Empresas con pendientes:\n\n${resumen.join("\n")}`;
+    return {
+      text:
+        `Empresas con pendientes (${resumen.length})\n\n${resumen.join("\n")}\n\n` +
+        "Para ver una empresa en detalle, escribe /empresa NOMBRE.",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
   if (comando.codigo === "BUSCAR_EMPRESA" || comando.codigo === "CONSULTAR_EMPRESA") {
     const termino = (comando.termino || "").trim();
     if (!termino) {
-      return "Escribe /empresa NOMBRE para consultar una empresa.";
+      return {
+        text: "Escribe /empresa NOMBRE para consultar una empresa.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
     const empresas = await listarEmpresasSimel({ soloActivas: true });
     const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
     if (!coincidencias.length) {
-      return `No encontré la empresa "${termino}".`;
+      return {
+        text:
+          `No encontre la empresa "${termino}".\n\n` +
+          "Prueba con una parte del nombre o usa /pendientes para ver empresas activas.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
     if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
-      return (
-        `Encontré ${coincidencias.length} empresa(s) parecida(s):\n\n` +
-        coincidencias.map((item, idx) => `${idx + 1}. ${item.empresa}`).join("\n") +
-        `\n\nEscribe: /empresa NOMBRE_EXACTO`
-      );
+      return {
+        text:
+          `Encontre ${coincidencias.length} empresa(s) parecida(s):\n\n` +
+          coincidencias.map((item, idx) => `${idx + 1}. ${item.empresa}`).join("\n") +
+          "\n\nToca una sugerencia o escribe /empresa NOMBRE_EXACTO.",
+        replyMarkup: buildSuggestionsKeyboard(coincidencias, contacto)
+      };
     }
 
     const empresa = coincidencias[0].empresa;
@@ -178,39 +279,69 @@ async function buildTelegramResponse({ contacto, comando, text }) {
     const total = Number(datos?.cantidadFilasPendientes || 0);
 
     if (!total) {
-      return `${empresa}\n\nNo tiene manifiestos pendientes de aprobación.`;
+      return {
+        text:
+          `${empresa}\n\n` +
+          "Estado: sin manifiestos pendientes de aprobacion.\n\n" +
+          `Ultimo check: ${datos?.ultimoCheck || "Sin datos"}\n` +
+          `Ultimo estado: ${datos?.ultimoEstado || "Sin datos"}`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
-    return (
-      `${empresa}\n\n` +
-      `Tiene manifiestos pendientes.\n` +
-      `Total: ${total}\n\n` +
-      `Ultimo check: ${datos?.ultimoCheck || "Sin datos"}\n` +
-      `Ultimo estado: ${datos?.ultimoEstado || "Sin datos"}\n` +
-      `Detalle: ${datos?.ultimoDetalle || "Sin detalle"}`
-    );
+    return {
+      text:
+        `${empresa}\n\n` +
+        "Estado: con manifiestos pendientes\n" +
+        `Total: ${total}\n\n` +
+        `Ultimo check: ${datos?.ultimoCheck || "Sin datos"}\n` +
+        `Ultimo estado: ${datos?.ultimoEstado || "Sin datos"}\n` +
+        `Detalle: ${datos?.ultimoDetalle || "Sin detalle"}\n\n` +
+        `Si quieres aprobarla, escribe: aprobar empresa ${empresa}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
   if (comando.codigo === "MI_PERFIL") {
-    return (
-      `Tu perfil\n\n` +
-      `Nombre: ${contacto.nombre}\n` +
-      `Rol: ${contacto.rol}\n\n` +
-      `Permisos:\n` +
-      `Menu: ${contacto.puedeVerMenu ? "si" : "no"}\n` +
-      `Consultar empresas: ${contacto.puedeVerManifiestosPendientes ? "si" : "no"}\n` +
-      `Aprobar manifiestos: ${contacto.puedeAprobarManifiestos ? "si" : "no"}`
-    );
+    return {
+      text:
+        `Tu perfil\n\n` +
+        `Nombre: ${contacto.nombre}\n` +
+        `Rol: ${contacto.rol}\n\n` +
+        `Permisos:\n` +
+        `Menu: ${contacto.puedeVerMenu ? "si" : "no"}\n` +
+        `Consultar empresas: ${contacto.puedeVerManifiestosPendientes ? "si" : "no"}\n` +
+        `Aprobar manifiestos: ${contacto.puedeAprobarManifiestos ? "si" : "no"}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
   }
 
-  return (
-    `Comando no reconocido.\n\n` +
-    `Prueba con:\n` +
-    `/menu\n` +
-    `/pendientes\n` +
-    `/empresa COLON\n` +
-    `/perfil`
-  );
+  if (comando.codigo === "SIMEL_START") {
+    if (!contacto?.puedeEjecutarBatch) {
+      return {
+        text: "No tienes permiso para ejecutar el batch.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    return {
+      text:
+        "La ejecucion de batch por Telegram todavia no esta conectada al flujo operativo.\n\n" +
+        "El acceso ya figura en tu menu porque eres Admin, pero antes de activarlo quiero dejar listas las validaciones y el monitoreo.",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  return {
+    text:
+      "No entendi ese comando.\n\n" +
+      "Prueba con una de estas opciones:\n" +
+      "- Ver pendientes\n" +
+      "- Consultar empresa\n" +
+      "- Mi perfil\n\n" +
+      "O escribe: /empresa COLON",
+    replyMarkup: buildMainKeyboard(contacto)
+  };
 }
 
 async function handleTelegramWebhook(req, res) {
@@ -219,7 +350,7 @@ async function handleTelegramWebhook(req, res) {
     const incomingSecret = req.headers["x-telegram-bot-api-secret-token"] || "";
 
     if (configuredSecret && incomingSecret !== configuredSecret) {
-      return res.status(401).json({ ok: false, error: "Telegram secret inválido" });
+      return res.status(401).json({ ok: false, error: "Telegram secret invalido" });
     }
 
     const update = req.body || {};
@@ -239,7 +370,9 @@ async function handleTelegramWebhook(req, res) {
     }
 
     if (/^\/?(id|whoami)$/i.test((message.text || "").trim())) {
-      await sendTelegramText(chatId, `Tu telegram_chat_id es: ${chatId}`);
+      await sendTelegramMessage(chatId, `Tu telegram_chat_id es: ${chatId}`, {
+        reply_markup: buildMainKeyboard(null)
+      });
       return res.status(200).json({ ok: true });
     }
 
@@ -259,23 +392,27 @@ async function handleTelegramWebhook(req, res) {
     });
 
     if (!contacto || !contacto.activo) {
-      const respuesta = `Tu usuario no está autorizado para usar este bot.\n\nTu telegram_chat_id es: ${chatId}`;
-      await sendTelegramText(chatId, respuesta);
+      const respuesta = `Tu usuario no esta autorizado para usar este bot.\n\nTu telegram_chat_id es: ${chatId}`;
+      await sendTelegramMessage(chatId, respuesta, {
+        reply_markup: {
+          keyboard: [[{ text: "/start" }], [{ text: "/id" }]],
+          resize_keyboard: true
+        }
+      });
       return res.status(200).json({ ok: true });
     }
 
     const comando = detectarComando(incomingText || "menu");
     await actualizarUltimaInteraccionWhatsApp(contacto.airtableRecordId, comando.codigo);
 
-    const respuesta = sanitizeOutgoingText(
-      await buildTelegramResponse({
-        contacto,
-        comando,
-        text: incomingText
-      })
-    );
+    const respuesta = await buildTelegramResponse({
+      contacto,
+      comando
+    });
 
-    await sendTelegramText(chatId, respuesta);
+    await sendTelegramMessage(chatId, sanitizeOutgoingText(respuesta.text), {
+      reply_markup: respuesta.replyMarkup || buildMainKeyboard(contacto)
+    });
 
     await crearLogTelegram({
       telegramChatId: chatId,
@@ -286,7 +423,7 @@ async function handleTelegramWebhook(req, res) {
       messageId,
       textoRecibido: incomingText,
       comandoDetectado: comando.codigo,
-      respuestaEnviada: respuesta,
+      respuestaEnviada: respuesta.text,
       estadoEjecucion: "OK"
     });
 
