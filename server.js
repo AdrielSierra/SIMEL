@@ -1,3 +1,5 @@
+require("./env-loader");
+
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
@@ -34,6 +36,7 @@ const {
 } = require("./airtable");
 
 const { iniciarWorker } = require("./worker");
+const { handleTelegramWebhook } = require("./telegram-bot");
 const {
   buscarEmpresasInteligente,
   parsearJSONSeguro,
@@ -2014,6 +2017,10 @@ app.post("/whatsapp/webhook", async (req, res) => {
     console.error("[WhatsApp] Error en webhook:", error.message);
     return res.status(200).json({ ok: true });
   }
+});
+
+app.post("/telegram/webhook", async (req, res) => {
+  return handleTelegramWebhook(req, res);
 });
 
 iniciarWorker();

@@ -1,3 +1,5 @@
+require("./env-loader");
+
 const { SimelClient, withTimeout } = require("./simel-client");
 const { verificarAprobacionPorHistorial } = require("./simel-verification");
 

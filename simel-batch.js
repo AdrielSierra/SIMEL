@@ -1,3 +1,5 @@
+require("./env-loader");
+
 const { checkSimel } = require("./simel-check");
 
 function logResultado(resultado) {

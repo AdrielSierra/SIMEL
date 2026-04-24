@@ -1,4 +1,7 @@
+require("./env-loader");
+
 const Airtable = require("airtable");
+const supabaseStore = require("./supabase-store");
 
 const base = new Airtable({
   apiKey: process.env.AIRTABLE_TOKEN
@@ -372,6 +375,10 @@ async function obtenerUltimoJobSimel() {
 }
 
 async function buscarAutorizadoWhatsApp(telefono) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.buscarAutorizadoWhatsApp(telefono);
+  }
+
   const telefonoNormalizado = normalizarTelefono(telefono);
 
   const records = await base(TABLAS.whatsappAutorizados)
@@ -405,6 +412,10 @@ async function buscarAutorizadoWhatsApp(telefono) {
 }
 
 async function actualizarUltimaInteraccionWhatsApp(airtableRecordId, ultimoComando = "") {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.actualizarUltimaInteraccionWhatsApp(airtableRecordId, ultimoComando);
+  }
+
   if (!airtableRecordId) return;
 
   await base(TABLAS.whatsappAutorizados).update([
@@ -436,6 +447,25 @@ async function crearLogWhatsApp({
   statusEnvioMeta = "",
   statusEntregaMeta = ""
 } = {}) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.crearLogWhatsApp({
+      telefonoRemitente,
+      autorizado,
+      contactoAutorizadoRecordId,
+      nombreRemitente,
+      tipoEvento,
+      messageIdMeta,
+      payloadCrudoEntrada,
+      textoRecibido,
+      comandoDetectado,
+      respuestaEnviada,
+      estadoEjecucion,
+      errorTecnico,
+      statusEnvioMeta,
+      statusEntregaMeta
+    });
+  }
+
   const fields = limpiarCampos({
     "Teléfono remitente": telefonoRemitente,
     "Autorizado": !!autorizado,
@@ -565,6 +595,10 @@ async function listarManifiestosPendientesActivos({ limit = 10 } = {}) {
 }
 
 async function listarEmpresasSimel({ soloActivas = true } = {}) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.listarEmpresasSimel({ soloActivas });
+  }
+
   const records = await base(TABLAS.usuariosSimel)
     .select({
       fields: ["Empresa", "Activo"],
@@ -631,6 +665,10 @@ async function buscarSesionWhatsAppRecord(telefono) {
 }
 
 async function obtenerSesionWhatsApp(telefono) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.obtenerSesionWhatsApp(telefono);
+  }
+
   const r = await buscarSesionWhatsAppRecord(telefono);
   if (!r) return null;
 
@@ -667,6 +705,20 @@ async function guardarSesionWhatsApp({
   observaciones = "",
   ttlSegundos = 15 * 60
 }) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.guardarSesionWhatsApp({
+      telefono,
+      contactoAutorizadoRecordId,
+      ultimoMensaje,
+      ultimoComando,
+      estadoSesion,
+      jobIdEnContexto,
+      empresaEnContexto,
+      observaciones,
+      ttlSegundos
+    });
+  }
+
   const telefonoNormalizado = normalizarTelefono(telefono);
   const existente = await buscarSesionWhatsAppRecord(telefonoNormalizado);
   const observacionesSerializadas = serializarObservacionesSesion({
@@ -703,6 +755,10 @@ async function guardarSesionWhatsApp({
 }
 
 async function cerrarSesionWhatsApp(telefono) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.cerrarSesionWhatsApp(telefono);
+  }
+
   const existente = await buscarSesionWhatsAppRecord(telefono);
   if (!existente) return;
 
@@ -817,6 +873,10 @@ async function obtenerAprobacionesPendientesConfirmacion() {
 }
 
 async function obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit = 5) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit);
+  }
+
   try {
     const records = await base(TABLAS.aprobaciones)
       .select({
@@ -842,6 +902,10 @@ async function obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit = 5) {
 }
 
 async function obtenerDatosEmpresaSimel(nombreEmpresa) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.obtenerDatosEmpresaSimel(nombreEmpresa);
+  }
+
   try {
     const records = await base(TABLAS.usuariosSimel)
       .select({
@@ -915,6 +979,10 @@ async function obtenerAdminsWhatsApp() {
 }
 
 async function obtenerUsuarioSimelPorEmpresa(nombreEmpresa) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.obtenerUsuarioSimelPorEmpresa(nombreEmpresa);
+  }
+
   try {
     const records = await base(TABLAS.usuariosSimel)
       .select({
@@ -973,7 +1041,8 @@ module.exports = {
   obtenerDatosEmpresaSimel,
   marcarEmpresasParaReintentar,
   obtenerAdminsWhatsApp,
-  obtenerUsuarioSimelPorEmpresa
+  obtenerUsuarioSimelPorEmpresa,
+  upsertEmpresaSimelEnSupabase: supabaseStore.upsertEmpresaConCredencial
 };
 
 

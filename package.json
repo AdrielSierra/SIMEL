@@ -10,7 +10,11 @@
     "batch": "node simel-batch.js",
     "simel:batch": "node simel-cli.js batch",
     "simel:check": "node simel-cli.js check",
-    "simel:approve": "node simel-cli.js approve"
+    "simel:approve": "node simel-cli.js approve",
+    "supabase:seed": "node supabase-seed.js",
+    "supabase:verify": "node supabase-verify.js",
+    "supabase:import-usuarios": "node supabase-import-usuarios.js",
+    "telegram:set-webhook": "node telegram-set-webhook.js"
   },
   "dependencies": {
     "airtable": "^0.12.2",
