@@ -16,6 +16,7 @@ let trabajando = false;
 const AUTO_APPROVE_HABILITADO = /^(1|true|si|yes)$/i.test(
   String(process.env.SIMEL_AUTO_APPROVE || "false")
 );
+const AIRTABLE_CONFIGURADO = !!(process.env.AIRTABLE_TOKEN && process.env.AIRTABLE_BASE_ID);
 
 // === MEJORA 2: NOTIFICACIONES PROACTIVAS ===
 
@@ -230,6 +231,13 @@ async function procesarJobPendiente() {
 }
 
 function iniciarWorker() {
+  if (!AIRTABLE_CONFIGURADO) {
+    console.log(
+      "[Worker] Desactivado: faltan AIRTABLE_TOKEN y/o AIRTABLE_BASE_ID. El servidor principal sigue operativo."
+    );
+    return;
+  }
+
   console.log("[Worker] Iniciando worker de background. Revisando jobs cada 15 segundos...");
   console.log(
     `[Worker] Autoaprobacion SIMEL: ${AUTO_APPROVE_HABILITADO ? "ACTIVA" : "INACTIVA"} (SIMEL_AUTO_APPROVE)`
