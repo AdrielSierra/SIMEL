@@ -5,8 +5,7 @@ const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
 const { runBatch } = require("./simel-batch");
-const { aprobarPendientesSimel } = require("./simel-approve");
-const { listarPendientesSimel } = require("./simel-pendientes");
+const { listarPendientesSimel, operarManifiestoSimel } = require("./simel-pendientes");
 const {
   obtenerUsuarioSimelPorEmpresa,
   buscarAutorizadoTelegram,
@@ -18,11 +17,15 @@ const {
   liberarLockOperacion,
   listarEmpresasSimel,
   listarUsuariosSimelActivos,
-  obtenerDatosEmpresaSimel
+  obtenerDatosEmpresaSimel,
+  obtenerSesionTelegram,
+  guardarSesionTelegram,
+  cerrarSesionTelegram
 } = require("./supabase-store");
 const {
   buscarEmpresasInteligente,
-  detectarComando
+  detectarComando,
+  parsearJSONSeguro
 } = require("./whatsapp-menu");
 
 let batchEnCurso = false;
@@ -241,6 +244,16 @@ function buildSuggestionsKeyboard(coincidencias = [], contacto) {
   };
 }
 
+function buildApprovalKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "1. Aprobar" }, { text: "2. Cancelar" }, { text: "3. Rechazar" }]
+    ],
+    resize_keyboard: true,
+    persistent_keyboard: true
+  };
+}
+
 function resolverCoincidenciaEmpresa(empresas, termino) {
   const coincidencias = buscarEmpresasInteligente(empresas, termino);
 
@@ -272,6 +285,29 @@ function construirRespuestaCoincidencias(termino, resultado, contacto) {
       "\n\nToca una sugerencia o escribe el nombre exacto.",
     replyMarkup: buildSuggestionsKeyboard(resultado.coincidencias, contacto)
   };
+}
+
+function formatManifestDetailTelegram(item, total = 1) {
+  const transportista = item.transportistas?.[0] || {};
+  const residuo = item.residuos?.[0] || {};
+  const generador = item.generadores?.[0] || {};
+  const cantidad = [residuo.cantidadEst || "N/D", residuo.unidad || ""].filter(Boolean).join(" ");
+
+  return [
+    `${item.empresa || item.empresaCreadora || "Empresa"}`,
+    "",
+    `Manifiestos pendientes: ${total}`,
+    `ID operacion: ${item.idOperacion || "N/D"}`,
+    `Transportista: ${transportista.nombre || "N/D"}`,
+    `Residuo: ${residuo.residuo || "N/D"}`,
+    `Cantidad: ${cantidad || "N/D"}`,
+    `Est. estado: ${generador.estado || item.establecimientoCreador || "N/D"}`,
+    "",
+    "Opciones:",
+    "1. Aprobar",
+    "2. Cancelar",
+    "3. Rechazar"
+  ].join("\n");
 }
 
 async function consultarEmpresaEnVivo({ termino, contacto }) {
@@ -349,22 +385,30 @@ async function consultarEmpresaEnVivo({ termino, contacto }) {
     };
   }
 
-  const items = (pendientes.items || [])
-    .slice(0, 5)
-    .map((item, index) => `${index + 1}. ${item.idOperacion || "sin ID"} - ${compactText(item.descripcion || item.detalle || "", 120)}`)
-    .join("\n");
+  const items = pendientes.items || [];
+  const primerItem = {
+    ...items[0],
+    empresa
+  };
+
+  await guardarSesionTelegram({
+    telegramChatId: contacto.telegramChatId,
+    contactoAutorizadoRecordId: contacto.airtableRecordId,
+    ultimoComando: "APROBACION_INTERACTIVA_TELEGRAM",
+    ultimoMensaje: termino,
+    estadoSesion: "Aprobacion interactiva telegram",
+    empresaEnContexto: empresa,
+    observaciones: JSON.stringify({
+      empresa,
+      items,
+      indiceActual: 0
+    }),
+    ttlSegundos: 10 * 60
+  });
 
   return {
-    text:
-      `${empresa}\n\n` +
-      "Estado: con manifiestos pendientes de aprobacion.\n" +
-      `Total: ${total}\n` +
-      `Ultimo check: ${new Date().toISOString()}\n` +
-      "Ultimo estado: CON_MANIFIESTO\n" +
-      `Detalle: ${detalle}\n\n` +
-      `${items ? `${items}\n\n` : ""}` +
-      `Si quieres aprobarla, escribe: aprobar empresa ${empresa}`,
-    replyMarkup: buildMainKeyboard(contacto)
+    text: formatManifestDetailTelegram(primerItem, total),
+    replyMarkup: buildApprovalKeyboard()
   };
 }
 
@@ -649,90 +693,13 @@ async function buildTelegramResponse({ contacto, comando }) {
   }
 
   if (comando.codigo === "SOLICITAR_APROBACION") {
-    if (!contacto.puedeAprobarManifiestos) {
-      return {
-        text: "No tienes permiso para aprobar manifiestos.",
-        replyMarkup: buildMainKeyboard(contacto)
-      };
-    }
-
-    const termino = (comando.termino || "").trim();
-    if (!termino) {
-      return {
-        text: "Escribe: aprobar empresa NOMBRE",
-        replyMarkup: buildMainKeyboard(contacto)
-      };
-    }
-
-    const empresas = await listarEmpresasSimel({ soloActivas: true });
-    const resuelta = resolverCoincidenciaEmpresa(empresas, termino);
-
-    if (!resuelta.ok) {
-      return construirRespuestaCoincidencias(termino, resuelta, contacto);
-    }
-
-    const empresa = resuelta.empresa;
-    const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
-
-    if (!cred?.usuario || !cred?.password) {
-      return {
-        text: `No encontre credenciales activas para ${empresa}.`,
-        replyMarkup: buildMainKeyboard(contacto)
-      };
-    }
-
-    const pendientes = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
-
-    if (!pendientes.ok) {
-      await actualizarResultadoSimel({
-        recordId: cred.recordId,
-        empresa,
-        usuario: cred.usuario,
-        estado: "ERROR",
-        filas: 0,
-        detalle: pendientes.error || "Error consultando pendientes"
-      });
-
-      return {
-        text: `No pude consultar los pendientes de ${empresa}.\n\nDetalle: ${compactText(pendientes.error || "Sin detalle", 500)}`,
-        replyMarkup: buildMainKeyboard(contacto)
-      };
-    }
-
-    await actualizarResultadoSimel({
-      recordId: cred.recordId,
-      empresa,
-      usuario: cred.usuario,
-      estado: pendientes.items.length ? "CON_MANIFIESTO" : "SIN_MANIFIESTO",
-      filas: pendientes.items.length,
-      detalle: pendientes.items.length
-        ? `Se encontraron ${pendientes.items.length} manifiesto(s) pendiente(s).`
-        : "No se han encontrado resultados."
+    return consultarEmpresaEnVivo({
+      termino: (comando.termino || "").trim(),
+      contacto
     });
-
-    if (!pendientes.items.length) {
-      return {
-        text: `${empresa} no tiene manifiestos pendientes de aprobacion.`,
-        replyMarkup: buildMainKeyboard(contacto)
-      };
-    }
-
-    const detalle = pendientes.items
-      .slice(0, 5)
-      .map((item, index) => `${index + 1}. ${item.idOperacion || "sin ID"} - ${compactText(item.descripcion || item.detalle || "", 120)}`)
-      .join("\n");
-
-    return {
-      text:
-        `${empresa} tiene ${pendientes.items.length} manifiesto(s) pendiente(s).\n\n` +
-        `${detalle || "No pude leer el detalle de las filas."}\n\n` +
-        "Para aprobar TODOS los pendientes de esta empresa, escribe exactamente:\n" +
-        `confirmar aprobar empresa ${empresa}`,
-      replyMarkup: buildMainKeyboard(contacto)
-    };
   }
 
-  if (comando.codigo === "CONFIRMAR_APROBACION_EMPRESA") {
+  if (comando.codigo === "APROBACION_INTERACTIVA_TELEGRAM") {
     if (!contacto.puedeAprobarManifiestos) {
       return {
         text: "No tienes permiso para aprobar manifiestos.",
@@ -740,17 +707,43 @@ async function buildTelegramResponse({ contacto, comando }) {
       };
     }
 
-    const termino = (comando.termino || "").trim();
-    const empresas = await listarEmpresasSimel({ soloActivas: true });
-    const resuelta = resolverCoincidenciaEmpresa(empresas, termino);
+    const sesion = await obtenerSesionTelegram(contacto.telegramChatId);
+    const dataSesion = parsearJSONSeguro(sesion?.observaciones, {});
+    const empresa = dataSesion?.empresa || sesion?.empresaEnContexto || "";
+    const items = Array.isArray(dataSesion?.items) ? dataSesion.items : [];
+    const actual = items[Number(dataSesion?.indiceActual || 0)];
+    const texto = String(comando.texto || "").trim().toLowerCase();
 
-    if (!resuelta.ok) {
-      return construirRespuestaCoincidencias(termino, resuelta, contacto);
+    if (!empresa || !actual) {
+      await cerrarSesionTelegram(contacto.telegramChatId);
+      return {
+        text: "La sesion del manifiesto vencio. Consulta nuevamente la empresa.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
     }
 
-    const empresa = resuelta.empresa;
-    const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+    if (texto === "2" || texto.includes("cancelar")) {
+      await cerrarSesionTelegram(contacto.telegramChatId);
+      return {
+        text: "Operacion cancelada.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
 
+    const accion = texto === "1" || texto.includes("aprobar")
+      ? "ACEPTAR"
+      : texto === "3" || texto.includes("rechazar")
+        ? "RECHAZAR"
+        : "";
+
+    if (!accion) {
+      return {
+        text: `${formatManifestDetailTelegram({ ...actual, empresa }, items.length)}\n\nResponde 1, 2 o 3.`,
+        replyMarkup: buildApprovalKeyboard()
+      };
+    }
+
+    const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
     if (!cred?.usuario || !cred?.password) {
       return {
         text: `No encontre credenciales activas para ${empresa}.`,
@@ -758,35 +751,64 @@ async function buildTelegramResponse({ contacto, comando }) {
       };
     }
 
-    const resultado = await aprobarPendientesSimel(cred.usuario, cred.password, { empresa });
-
-    await actualizarResultadoSimel({
-      recordId: cred.recordId,
-      empresa,
-      usuario: cred.usuario,
-      estado: resultado.ok ? resultado.estado : "ERROR",
-      filas: resultado.pendientesDespues || 0,
-      detalle: resultado.detalle || resultado.error || ""
+    const resultado = await operarManifiestoSimel(cred.usuario, cred.password, {
+      idOperacion: actual.idOperacion,
+      accion
     });
 
     if (!resultado.ok) {
       return {
         text:
-          `No pude completar la aprobacion de ${empresa}.\n\n` +
-          `Detalle: ${compactText(resultado.detalle || resultado.error || "Sin detalle", 600)}`,
+          `No pude ${accion === "ACEPTAR" ? "aprobar" : "rechazar"} el manifiesto ${actual.idOperacion}.\n\n` +
+          `Detalle: ${compactText(resultado.error || "Sin detalle", 600)}`,
+        replyMarkup: buildApprovalKeyboard()
+      };
+    }
+
+    const recarga = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+    const restantes = recarga.ok ? recarga.items || [] : [];
+
+    await actualizarResultadoSimel({
+      recordId: cred.recordId,
+      empresa,
+      usuario: cred.usuario,
+      estado: restantes.length ? "CON_MANIFIESTO" : "SIN_MANIFIESTO",
+      filas: restantes.length,
+      detalle: restantes.length
+        ? `Se encontraron ${restantes.length} manifiesto(s) pendiente(s).`
+        : "No se han encontrado resultados."
+    });
+
+    if (!restantes.length) {
+      await cerrarSesionTelegram(contacto.telegramChatId);
+      return {
+        text:
+          `${accion === "ACEPTAR" ? "Aprobado" : "Rechazado"} el manifiesto ${actual.idOperacion}.\n\n` +
+          `No quedan pendientes en ${empresa}.`,
         replyMarkup: buildMainKeyboard(contacto)
       };
     }
 
+    await guardarSesionTelegram({
+      telegramChatId: contacto.telegramChatId,
+      contactoAutorizadoRecordId: contacto.airtableRecordId,
+      ultimoComando: "APROBACION_INTERACTIVA_TELEGRAM",
+      ultimoMensaje: comando.texto || "",
+      estadoSesion: "Aprobacion interactiva telegram",
+      empresaEnContexto: empresa,
+      observaciones: JSON.stringify({
+        empresa,
+        items: restantes,
+        indiceActual: 0
+      }),
+      ttlSegundos: 10 * 60
+    });
+
     return {
       text:
-        `Aprobacion finalizada para ${empresa}.\n\n` +
-        `Estado: ${resultado.estado}\n` +
-        `Aprobados: ${resultado.aprobados || 0}\n` +
-        `Pendientes antes: ${resultado.pendientesAntes || 0}\n` +
-        `Pendientes despues: ${resultado.pendientesDespues || 0}\n\n` +
-        `${resultado.detalle || ""}`,
-      replyMarkup: buildMainKeyboard(contacto)
+        `${accion === "ACEPTAR" ? "Aprobado" : "Rechazado"} el manifiesto ${actual.idOperacion}.\n\n` +
+        `${formatManifestDetailTelegram({ ...restantes[0], empresa }, restantes.length)}`,
+      replyMarkup: buildApprovalKeyboard()
     };
   }
 
@@ -905,17 +927,20 @@ async function handleTelegramWebhook(req, res) {
       return res.status(200).json({ ok: true });
     }
 
+    const sesionTelegram = await obtenerSesionTelegram(chatId);
+
     let comando;
 
-    if (incomingText === "ayuda consultar empresa") {
+    if (
+      sesionTelegram &&
+      sesionTelegram.estadoSesion === "Aprobacion interactiva telegram" &&
+      !/^\/?(menu|start|help|id|whoami)$/i.test((message.text || "").trim())
+    ) {
+      comando = { codigo: "APROBACION_INTERACTIVA_TELEGRAM", texto: incomingText };
+    } else if (incomingText === "ayuda consultar empresa") {
       comando = { codigo: "BUSCAR_EMPRESA_AYUDA" };
     } else if (incomingText === "ayuda aprobar empresa") {
       comando = { codigo: "APROBAR_EMPRESA_AYUDA" };
-    } else if (/^confirmar aprobar(?: empresa)?\s+(.+)$/i.test(incomingText)) {
-      comando = {
-        codigo: "CONFIRMAR_APROBACION_EMPRESA",
-        termino: incomingText.replace(/^confirmar aprobar(?: empresa)?\s+/i, "").trim()
-      };
     } else {
       comando = detectarComando(incomingText || "menu");
     }
@@ -941,11 +966,11 @@ async function handleTelegramWebhook(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if (["BUSCAR_EMPRESA", "CONSULTAR_EMPRESA", "SOLICITAR_APROBACION", "CONFIRMAR_APROBACION_EMPRESA"].includes(comando.codigo)) {
+    if (["BUSCAR_EMPRESA", "CONSULTAR_EMPRESA", "SOLICITAR_APROBACION", "APROBACION_INTERACTIVA_TELEGRAM"].includes(comando.codigo)) {
       await sendTelegramMessage(
         chatId,
-        comando.codigo === "CONFIRMAR_APROBACION_EMPRESA"
-          ? "Estoy ejecutando la aprobacion en SIMEL. Te aviso por aca cuando termine."
+        comando.codigo === "APROBACION_INTERACTIVA_TELEGRAM"
+          ? "Estoy operando el manifiesto en SIMEL. Dame un momento."
           : "Estoy consultando los pendientes reales en SIMEL. Dame un momento.",
         { reply_markup: buildMainKeyboard(contacto) }
       );

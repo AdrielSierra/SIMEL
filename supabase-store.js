@@ -22,6 +22,7 @@ function buildSessionPayload(row) {
   return {
     airtableRecordId: row.id,
     telefono: row.telefono || "",
+    telegramChatId: row.telegram_chat_id || "",
     ultimoMensaje: row.ultimo_mensaje || "",
     ultimoComando: row.ultimo_comando || "",
     estadoSesion: row.estado_sesion || "",
@@ -455,6 +456,105 @@ async function cerrarSesionWhatsApp(telefono) {
   });
 }
 
+async function obtenerSesionTelegram(chatId) {
+  const row = await maybeSingle("/rest/v1/sesiones_chat", {
+    select: "*,empresa:empresa_id(nombre)",
+    canal: "eq.telegram",
+    telegram_chat_id: `eq.${chatId}`,
+    order: "updated_at.desc",
+    limit: "1"
+  });
+
+  if (!row) return null;
+
+  const hydrated = {
+    ...row,
+    empresa_nombre: row.empresa?.nombre || ""
+  };
+
+  return buildSessionPayload(hydrated);
+}
+
+async function guardarSesionTelegram({
+  telegramChatId,
+  contactoAutorizadoRecordId = null,
+  ultimoMensaje = "",
+  ultimoComando = "",
+  estadoSesion = "Activa",
+  jobIdEnContexto = "",
+  empresaEnContexto = "",
+  observaciones = "",
+  ttlSegundos = 15 * 60
+}) {
+  const actual = await maybeSingle("/rest/v1/sesiones_chat", {
+    select: "id",
+    canal: "eq.telegram",
+    telegram_chat_id: `eq.${telegramChatId}`,
+    order: "updated_at.desc",
+    limit: "1"
+  });
+
+  let empresaId = null;
+  if (empresaEnContexto) {
+    const empresa = await maybeSingle("/rest/v1/empresas", {
+      select: "id",
+      nombre: `eq.${empresaEnContexto}`,
+      limit: "1"
+    });
+    empresaId = empresa?.id || null;
+  }
+
+  const payload = {
+    canal: "telegram",
+    telegram_chat_id: String(telegramChatId || ""),
+    usuario_chat_id: contactoAutorizadoRecordId,
+    estado_sesion: estadoSesion,
+    empresa_id: empresaId,
+    ultimo_comando: ultimoComando,
+    ultimo_mensaje: ultimoMensaje,
+    job_id_en_contexto: jobIdEnContexto,
+    datos_json:
+      typeof observaciones === "string"
+        ? (() => {
+            try {
+              return observaciones ? JSON.parse(observaciones) : {};
+            } catch {
+              return observaciones ? { nota: observaciones } : {};
+            }
+          })()
+        : observaciones || {},
+    expira_at: new Date(Date.now() + Number(ttlSegundos || 0) * 1000).toISOString()
+  };
+
+  if (actual?.id) {
+    await supabaseRequest(`/rest/v1/sesiones_chat?id=eq.${actual.id}`, {
+      method: "PATCH",
+      body: payload,
+      prefer: "return=minimal"
+    });
+    return;
+  }
+
+  await supabaseRequest("/rest/v1/sesiones_chat", {
+    method: "POST",
+    body: payload,
+    prefer: "return=minimal"
+  });
+}
+
+async function cerrarSesionTelegram(chatId) {
+  await supabaseRequest(`/rest/v1/sesiones_chat?canal=eq.telegram&telegram_chat_id=eq.${chatId}`, {
+    method: "PATCH",
+    body: {
+      estado_sesion: "Cerrada",
+      empresa_id: null,
+      job_id_en_contexto: "",
+      datos_json: {}
+    },
+    prefer: "return=minimal"
+  });
+}
+
 async function obtenerHistorialAprobacionesEmpresa(nombreEmpresa, limit = 5) {
   const rows = await supabaseRequest("/rest/v1/historial_aprobaciones", {
     query: {
@@ -604,6 +704,9 @@ module.exports = {
   obtenerSesionWhatsApp,
   guardarSesionWhatsApp,
   cerrarSesionWhatsApp,
+  obtenerSesionTelegram,
+  guardarSesionTelegram,
+  cerrarSesionTelegram,
   obtenerHistorialAprobacionesEmpresa,
   obtenerDatosEmpresaSimel,
   upsertEmpresaConCredencial

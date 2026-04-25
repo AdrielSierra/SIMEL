@@ -237,6 +237,7 @@ class SimelClient {
     const tablas = detalleCrudo?.tablas || [];
     let residuos = [];
     let transportistas = [];
+    let generadores = [];
 
     for (const tabla of tablas) {
       const headers = (tabla.headers || []).map((h) => normalizarTexto(h));
@@ -272,9 +273,22 @@ class SimelClient {
         });
         if (mapped.length) transportistas = mapped;
       }
+
+      if (titulo.includes("generadores")) {
+        const parsed = parsearTabla(tabla.headers, tabla.rows || []);
+        generadores = parsed.map((r, idx) => {
+          const raw = tabla.rows?.[idx] || [];
+          return {
+            estado: valorPorHeader(r, ["Estado"]) || raw[0] || "",
+            nombre: valorPorHeader(r, ["Nombre"]) || raw[1] || "",
+            expediente: valorPorHeader(r, ["Expediente"]) || raw[3] || "",
+            cuit: valorPorHeader(r, ["Cuit", "CUIT"]) || raw[4] || ""
+          };
+        });
+      }
     }
 
-    return { residuos, transportistas };
+    return { residuos, transportistas, generadores };
   }
 
   async cerrarModal() {
@@ -314,7 +328,12 @@ class SimelClient {
     for (const fila of seleccion) {
       await this.abrirDetallePorIndice(fila.rowIndex);
       const detalle = await this.extraerDetalleModal();
-      items.push({ ...fila, residuos: detalle.residuos, transportistas: detalle.transportistas });
+      items.push({
+        ...fila,
+        residuos: detalle.residuos,
+        transportistas: detalle.transportistas,
+        generadores: detalle.generadores
+      });
       await this.cerrarModal();
       await this.page.waitForTimeout(300);
     }
