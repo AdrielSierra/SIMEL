@@ -190,6 +190,10 @@ async function obtenerTodosLosUsuariosSimelPendientes({ soloMarcadosBatch = true
 }
 
 async function actualizarResultadoSimel(resultado) {
+  if (supabaseStore.isSupabaseEnabled()) {
+    return supabaseStore.actualizarResultadoSimel(resultado);
+  }
+
   if (!resultado.recordId) return;
 
   await getBase()(TABLAS.usuariosSimel).update([

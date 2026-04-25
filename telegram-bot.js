@@ -5,10 +5,14 @@ const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
 const { runBatch } = require("./simel-batch");
+const { aprobarPendientesSimel } = require("./simel-approve");
+const { listarPendientesSimel } = require("./simel-pendientes");
 const {
+  obtenerUsuarioSimelPorEmpresa,
   buscarAutorizadoTelegram,
   actualizarUltimaInteraccionWhatsApp,
   crearLogTelegram,
+  actualizarResultadoSimel,
   registrarMensajeProcesado,
   adquirirLockOperacion,
   liberarLockOperacion,
@@ -237,6 +241,39 @@ function buildSuggestionsKeyboard(coincidencias = [], contacto) {
   };
 }
 
+function resolverCoincidenciaEmpresa(empresas, termino) {
+  const coincidencias = buscarEmpresasInteligente(empresas, termino);
+
+  if (!coincidencias.length) {
+    return { ok: false, tipo: "sin_coincidencias", coincidencias: [] };
+  }
+
+  if (coincidencias[0].score !== 100 && !(coincidencias.length === 1 && coincidencias[0].score >= 92)) {
+    return { ok: false, tipo: "ambiguo", coincidencias };
+  }
+
+  return { ok: true, empresa: coincidencias[0].empresa, coincidencias };
+}
+
+function construirRespuestaCoincidencias(termino, resultado, contacto) {
+  if (resultado.tipo === "sin_coincidencias") {
+    return {
+      text:
+        `No encontre la empresa "${termino}".\n\n` +
+        "Prueba con una parte del nombre o usa /pendientes para ver empresas activas.",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  return {
+    text:
+      `Encontre ${resultado.coincidencias.length} empresa(s) parecida(s):\n\n` +
+      resultado.coincidencias.map((item, idx) => `${idx + 1}. ${item.empresa}`).join("\n") +
+      "\n\nToca una sugerencia o escribe el nombre exacto.",
+    replyMarkup: buildSuggestionsKeyboard(resultado.coincidencias, contacto)
+  };
+}
+
 function formatBatchResumen(resumen) {
   const topPendientes = (resumen.empresasConManifiesto || [])
     .slice(0, 5)
@@ -319,7 +356,7 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
       return;
     }
 
-    const resumen = await runBatch({ usuarios });
+    const resumen = await runBatch({ usuarios, onResultado: actualizarResultadoSimel });
     const resumenTexto = formatBatchResumen(resumen);
 
     await sendTelegramMessage(chatId, resumenTexto, {
@@ -512,6 +549,148 @@ async function buildTelegramResponse({ contacto, comando }) {
       };
   }
 
+  if (comando.codigo === "SOLICITAR_APROBACION") {
+    if (!contacto.puedeAprobarManifiestos) {
+      return {
+        text: "No tienes permiso para aprobar manifiestos.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const termino = (comando.termino || "").trim();
+    if (!termino) {
+      return {
+        text: "Escribe: aprobar empresa NOMBRE",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const empresas = await listarEmpresasSimel({ soloActivas: true });
+    const resuelta = resolverCoincidenciaEmpresa(empresas, termino);
+
+    if (!resuelta.ok) {
+      return construirRespuestaCoincidencias(termino, resuelta, contacto);
+    }
+
+    const empresa = resuelta.empresa;
+    const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+
+    if (!cred?.usuario || !cred?.password) {
+      return {
+        text: `No encontre credenciales activas para ${empresa}.`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const pendientes = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+
+    if (!pendientes.ok) {
+      await actualizarResultadoSimel({
+        recordId: cred.recordId,
+        empresa,
+        usuario: cred.usuario,
+        estado: "ERROR",
+        filas: 0,
+        detalle: pendientes.error || "Error consultando pendientes"
+      });
+
+      return {
+        text: `No pude consultar los pendientes de ${empresa}.\n\nDetalle: ${compactText(pendientes.error || "Sin detalle", 500)}`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    await actualizarResultadoSimel({
+      recordId: cred.recordId,
+      empresa,
+      usuario: cred.usuario,
+      estado: pendientes.items.length ? "CON_MANIFIESTO" : "SIN_MANIFIESTO",
+      filas: pendientes.items.length,
+      detalle: pendientes.items.length
+        ? `Se encontraron ${pendientes.items.length} manifiesto(s) pendiente(s).`
+        : "No se han encontrado resultados."
+    });
+
+    if (!pendientes.items.length) {
+      return {
+        text: `${empresa} no tiene manifiestos pendientes de aprobacion.`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const detalle = pendientes.items
+      .slice(0, 5)
+      .map((item, index) => `${index + 1}. ${item.idOperacion || "sin ID"} - ${compactText(item.descripcion || item.detalle || "", 120)}`)
+      .join("\n");
+
+    return {
+      text:
+        `${empresa} tiene ${pendientes.items.length} manifiesto(s) pendiente(s).\n\n` +
+        `${detalle || "No pude leer el detalle de las filas."}\n\n` +
+        "Para aprobar TODOS los pendientes de esta empresa, escribe exactamente:\n" +
+        `confirmar aprobar empresa ${empresa}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "CONFIRMAR_APROBACION_EMPRESA") {
+    if (!contacto.puedeAprobarManifiestos) {
+      return {
+        text: "No tienes permiso para aprobar manifiestos.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const termino = (comando.termino || "").trim();
+    const empresas = await listarEmpresasSimel({ soloActivas: true });
+    const resuelta = resolverCoincidenciaEmpresa(empresas, termino);
+
+    if (!resuelta.ok) {
+      return construirRespuestaCoincidencias(termino, resuelta, contacto);
+    }
+
+    const empresa = resuelta.empresa;
+    const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+
+    if (!cred?.usuario || !cred?.password) {
+      return {
+        text: `No encontre credenciales activas para ${empresa}.`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const resultado = await aprobarPendientesSimel(cred.usuario, cred.password, { empresa });
+
+    await actualizarResultadoSimel({
+      recordId: cred.recordId,
+      empresa,
+      usuario: cred.usuario,
+      estado: resultado.ok ? resultado.estado : "ERROR",
+      filas: resultado.pendientesDespues || 0,
+      detalle: resultado.detalle || resultado.error || ""
+    });
+
+    if (!resultado.ok) {
+      return {
+        text:
+          `No pude completar la aprobacion de ${empresa}.\n\n` +
+          `Detalle: ${compactText(resultado.detalle || resultado.error || "Sin detalle", 600)}`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    return {
+      text:
+        `Aprobacion finalizada para ${empresa}.\n\n` +
+        `Estado: ${resultado.estado}\n` +
+        `Aprobados: ${resultado.aprobados || 0}\n` +
+        `Pendientes antes: ${resultado.pendientesAntes || 0}\n` +
+        `Pendientes despues: ${resultado.pendientesDespues || 0}\n\n` +
+        `${resultado.detalle || ""}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
   if (comando.codigo === "MI_PERFIL") {
     return {
       text:
@@ -633,6 +812,11 @@ async function handleTelegramWebhook(req, res) {
       comando = { codigo: "BUSCAR_EMPRESA_AYUDA" };
     } else if (incomingText === "ayuda aprobar empresa") {
       comando = { codigo: "APROBAR_EMPRESA_AYUDA" };
+    } else if (/^confirmar aprobar(?: empresa)?\s+(.+)$/i.test(incomingText)) {
+      comando = {
+        codigo: "CONFIRMAR_APROBACION_EMPRESA",
+        termino: incomingText.replace(/^confirmar aprobar(?: empresa)?\s+/i, "").trim()
+      };
     } else {
       comando = detectarComando(incomingText || "menu");
     }
@@ -654,6 +838,46 @@ async function handleTelegramWebhook(req, res) {
       }).catch((error) => {
         console.error("[Telegram] Error lanzando batch:", error.message);
       });
+
+      return res.status(200).json({ ok: true });
+    }
+
+    if (["SOLICITAR_APROBACION", "CONFIRMAR_APROBACION_EMPRESA"].includes(comando.codigo)) {
+      await sendTelegramMessage(
+        chatId,
+        comando.codigo === "CONFIRMAR_APROBACION_EMPRESA"
+          ? "Estoy ejecutando la aprobacion en SIMEL. Te aviso por aca cuando termine."
+          : "Estoy consultando los pendientes reales en SIMEL. Dame un momento.",
+        { reply_markup: buildMainKeyboard(contacto) }
+      );
+
+      buildTelegramResponse({ contacto, comando })
+        .then(async (respuesta) => {
+          await sendTelegramMessage(chatId, sanitizeOutgoingText(respuesta.text), {
+            reply_markup: respuesta.replyMarkup || buildMainKeyboard(contacto)
+          });
+
+          await crearLogTelegram({
+            telegramChatId: chatId,
+            autorizado: true,
+            contactoAutorizadoRecordId: contacto.airtableRecordId,
+            nombreRemitente: contacto.nombre || fromName,
+            tipoEvento: "Mensaje saliente",
+            messageId,
+            textoRecibido: incomingText,
+            comandoDetectado: comando.codigo,
+            respuestaEnviada: respuesta.text,
+            estadoEjecucion: "OK"
+          });
+        })
+        .catch(async (error) => {
+          console.error("[Telegram] Error procesando comando largo:", error.message);
+          await sendTelegramMessage(
+            chatId,
+            `No pude completar la operacion.\n\nDetalle: ${compactText(error.message, 600)}`,
+            { reply_markup: buildMainKeyboard(contacto) }
+          ).catch(() => {});
+        });
 
       return res.status(200).json({ ok: true });
     }

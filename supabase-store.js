@@ -258,6 +258,22 @@ async function crearLogTelegram({
   });
 }
 
+async function actualizarResultadoSimel(resultado) {
+  if (!resultado?.recordId) return;
+
+  await supabaseRequest(`/rest/v1/credenciales_simel?id=eq.${resultado.recordId}`, {
+    method: "PATCH",
+    prefer: "return=minimal",
+    body: {
+      ultimo_check_at: new Date().toISOString(),
+      ultimo_estado: resultado.estado || "",
+      ultimo_detalle: resultado.detalle || resultado.error || "",
+      cantidad_filas_pendientes: Number(resultado.filas || 0),
+      updated_at: new Date().toISOString()
+    }
+  });
+}
+
 function hashPayload(payload = "") {
   return crypto.createHash("sha256").update(String(payload || "")).digest("hex");
 }
@@ -581,6 +597,7 @@ module.exports = {
   actualizarUltimaInteraccionWhatsApp,
   crearLogWhatsApp,
   crearLogTelegram,
+  actualizarResultadoSimel,
   registrarMensajeProcesado,
   adquirirLockOperacion,
   liberarLockOperacion,
