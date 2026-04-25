@@ -274,6 +274,100 @@ function construirRespuestaCoincidencias(termino, resultado, contacto) {
   };
 }
 
+async function consultarEmpresaEnVivo({ termino, contacto }) {
+  if (!termino) {
+    return {
+      text: "Escribe /empresa NOMBRE para consultar una empresa.",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  const empresas = await listarEmpresasSimel({ soloActivas: true });
+  const resuelta = resolverCoincidenciaEmpresa(empresas, termino);
+
+  if (!resuelta.ok) {
+    return construirRespuestaCoincidencias(termino, resuelta, contacto);
+  }
+
+  const empresa = resuelta.empresa;
+  const cred = await obtenerUsuarioSimelPorEmpresa(empresa);
+
+  if (!cred?.usuario || !cred?.password) {
+    return {
+      text: `No encontre credenciales activas para ${empresa}.`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  const pendientes = await listarPendientesSimel(cred.usuario, cred.password, { maxItems: 20 });
+
+  if (!pendientes.ok) {
+    const datosGuardados = await obtenerDatosEmpresaSimel(empresa);
+    const detalleError = compactText(pendientes.error || "Sin detalle", 500);
+
+    if (datosGuardados) {
+      return {
+        text:
+          `No pude consultar SIMEL en vivo para ${empresa}.\n\n` +
+          `Detalle: ${detalleError}\n\n` +
+          "Te dejo el ultimo estado guardado:\n" +
+          `Ultimo check: ${datosGuardados.ultimoCheck || "Sin datos"}\n` +
+          `Ultimo estado: ${datosGuardados.ultimoEstado || "Sin datos"}\n` +
+          `Filas pendientes: ${Number(datosGuardados.cantidadFilasPendientes || 0)}`,
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    return {
+      text: `No pude consultar los pendientes de ${empresa}.\n\nDetalle: ${detalleError}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  const total = Number(pendientes.total || pendientes.items?.length || 0);
+  const detalle = total
+    ? `Se encontraron ${total} manifiesto(s) pendiente(s).`
+    : "No se han encontrado resultados.";
+
+  await actualizarResultadoSimel({
+    recordId: cred.recordId,
+    empresa,
+    usuario: cred.usuario,
+    estado: total ? "CON_MANIFIESTO" : "SIN_MANIFIESTO",
+    filas: total,
+    detalle
+  });
+
+  if (!total) {
+    return {
+      text:
+        `${empresa}\n\n` +
+        "Estado: sin manifiestos pendientes de aprobacion.\n\n" +
+        `Ultimo check: ${new Date().toISOString()}\n` +
+        "Ultimo estado: SIN_MANIFIESTO",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  const items = (pendientes.items || [])
+    .slice(0, 5)
+    .map((item, index) => `${index + 1}. ${item.idOperacion || "sin ID"} - ${compactText(item.descripcion || item.detalle || "", 120)}`)
+    .join("\n");
+
+  return {
+    text:
+      `${empresa}\n\n` +
+      "Estado: con manifiestos pendientes de aprobacion.\n" +
+      `Total: ${total}\n` +
+      `Ultimo check: ${new Date().toISOString()}\n` +
+      "Ultimo estado: CON_MANIFIESTO\n" +
+      `Detalle: ${detalle}\n\n` +
+      `${items ? `${items}\n\n` : ""}` +
+      `Si quieres aprobarla, escribe: aprobar empresa ${empresa}`,
+    replyMarkup: buildMainKeyboard(contacto)
+  };
+}
+
 function formatBatchResumen(resumen) {
   const topPendientes = (resumen.empresasConManifiesto || [])
     .slice(0, 5)
@@ -489,6 +583,11 @@ async function buildTelegramResponse({ contacto, comando }) {
   }
 
   if (comando.codigo === "BUSCAR_EMPRESA" || comando.codigo === "CONSULTAR_EMPRESA") {
+    return consultarEmpresaEnVivo({
+      termino: (comando.termino || "").trim(),
+      contacto
+    });
+
     const termino = (comando.termino || "").trim();
     if (!termino) {
       return {
@@ -842,7 +941,7 @@ async function handleTelegramWebhook(req, res) {
       return res.status(200).json({ ok: true });
     }
 
-    if (["SOLICITAR_APROBACION", "CONFIRMAR_APROBACION_EMPRESA"].includes(comando.codigo)) {
+    if (["BUSCAR_EMPRESA", "CONSULTAR_EMPRESA", "SOLICITAR_APROBACION", "CONFIRMAR_APROBACION_EMPRESA"].includes(comando.codigo)) {
       await sendTelegramMessage(
         chatId,
         comando.codigo === "CONFIRMAR_APROBACION_EMPRESA"
