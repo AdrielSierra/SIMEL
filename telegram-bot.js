@@ -9,6 +9,9 @@ const {
   buscarAutorizadoTelegram,
   actualizarUltimaInteraccionWhatsApp,
   crearLogTelegram,
+  registrarMensajeProcesado,
+  adquirirLockOperacion,
+  liberarLockOperacion,
   listarEmpresasSimel,
   listarUsuariosSimelActivos,
   obtenerDatosEmpresaSimel
@@ -75,11 +78,19 @@ async function sendTelegramText(chatId, text) {
 }
 
 async function sendTelegramMessage(chatId, text, extra = {}) {
-  return postTelegramApi("sendMessage", {
-    chat_id: chatId,
-    text: text || "Sin respuesta",
-    ...extra
-  });
+  const chunks = splitTelegramText(text || "Sin respuesta");
+  let lastResponse = null;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const isLast = i === chunks.length - 1;
+    lastResponse = await postTelegramApi("sendMessage", {
+      chat_id: chatId,
+      text: chunks[i],
+      ...(isLast ? extra : {})
+    });
+  }
+
+  return lastResponse;
 }
 
 function sanitizeOutgoingText(text = "") {
@@ -87,6 +98,47 @@ function sanitizeOutgoingText(text = "") {
     .replace(/\*/g, "")
     .replace(/_/g, "")
     .replace(/`/g, "");
+}
+
+function splitTelegramText(text = "", maxLength = 3500) {
+  const raw = String(text || "");
+  if (raw.length <= maxLength) return [raw || "Sin respuesta"];
+
+  const chunks = [];
+  let current = "";
+
+  for (const line of raw.split("\n")) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length <= maxLength) {
+      current = next;
+      continue;
+    }
+
+    if (current) chunks.push(current);
+
+    if (line.length <= maxLength) {
+      current = line;
+      continue;
+    }
+
+    for (let i = 0; i < line.length; i += maxLength) {
+      chunks.push(line.slice(i, i + maxLength));
+    }
+    current = "";
+  }
+
+  if (current) chunks.push(current);
+  return chunks.length ? chunks : ["Sin respuesta"];
+}
+
+function compactText(text = "", maxLength = 240) {
+  const cleaned = String(text || "")
+    .replace(/╔[\s\S]*?╝/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, maxLength - 3)}...`;
 }
 
 function normalizeTelegramText(text = "") {
@@ -191,9 +243,10 @@ function formatBatchResumen(resumen) {
     .map((item, index) => `${index + 1}. ${item.empresa} (${item.filas || 0})`)
     .join("\n");
 
-  const topErrores = (resumen.empresasConError || [])
+  const errores = resumen.empresasConError || [];
+  const topErrores = errores
     .slice(0, 3)
-    .map((item, index) => `${index + 1}. ${item.empresa}: ${item.detalle || "Sin detalle"}`)
+    .map((item, index) => `${index + 1}. ${item.empresa}: ${compactText(item.detalle || "Sin detalle", 220)}`)
     .join("\n");
 
   const partes = [
@@ -211,6 +264,9 @@ function formatBatchResumen(resumen) {
 
   if (topErrores) {
     partes.push("", "⚠️ Errores detectados:", topErrores);
+    if (errores.length > 3) {
+      partes.push(`... y ${errores.length - 3} error(es) mas.`);
+    }
   }
 
   partes.push("", "Puedes consultar una empresa con /empresa NOMBRE.");
@@ -222,6 +278,22 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
     await sendTelegramMessage(
       chatId,
       "⏳ Ya hay un batch en curso. Cuando termine, te envio el resumen por aqui.",
+      { reply_markup: buildMainKeyboard(contacto) }
+    );
+    return;
+  }
+
+  const lock = await adquirirLockOperacion({
+    tipoLock: "telegram_batch",
+    clave: "global",
+    owner: `${contacto?.nombre || fromName || "Telegram"}:${chatId}`,
+    ttlSegundos: 60 * 60
+  });
+
+  if (!lock.adquirido) {
+    await sendTelegramMessage(
+      chatId,
+      "⏳ Ya hay un batch en curso. Te aviso: no lance otro para evitar cruces con SIMEL.",
       { reply_markup: buildMainKeyboard(contacto) }
     );
     return;
@@ -248,8 +320,9 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
     }
 
     const resumen = await runBatch({ usuarios });
+    const resumenTexto = formatBatchResumen(resumen);
 
-    await sendTelegramMessage(chatId, formatBatchResumen(resumen), {
+    await sendTelegramMessage(chatId, resumenTexto, {
       reply_markup: buildMainKeyboard(contacto)
     });
 
@@ -261,7 +334,7 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
       tipoEvento: "Batch Telegram finalizado",
       textoRecibido: triggerText,
       comandoDetectado: "SIMEL_START",
-      respuestaEnviada: formatBatchResumen(resumen),
+      respuestaEnviada: resumenTexto,
       estadoEjecucion: "OK"
     });
   } catch (error) {
@@ -269,11 +342,12 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
 
     await sendTelegramMessage(
       chatId,
-      `⚠️ No pude completar el batch.\n\nDetalle: ${error.message}`,
+      `⚠️ No pude completar el batch.\n\nDetalle: ${compactText(error.message, 600)}`,
       { reply_markup: buildMainKeyboard(contacto) }
     );
   } finally {
     batchEnCurso = false;
+    await liberarLockOperacion({ tipoLock: "telegram_batch", clave: "global" }).catch(() => {});
   }
 }
 
@@ -504,6 +578,20 @@ async function handleTelegramWebhook(req, res) {
 
     if (!chatId) {
       return res.status(200).json({ ok: true });
+    }
+
+    const idempotencyKey = `${chatId}:${messageId || update.update_id || ""}`;
+    if (idempotencyKey !== `${chatId}:`) {
+      const registro = await registrarMensajeProcesado({
+        canal: "telegram",
+        messageId: idempotencyKey,
+        usuarioOrigen: chatId,
+        payload: payloadCrudo
+      });
+
+      if (registro.duplicado) {
+        return res.status(200).json({ ok: true, duplicate: true });
+      }
     }
 
     if (/^\/?(id|whoami)$/i.test((message.text || "").trim())) {

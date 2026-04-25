@@ -1,5 +1,6 @@
 const { decryptText, encryptText } = require("./crypto-utils");
 const { isSupabaseEnabled, supabaseRequest } = require("./supabase");
+const crypto = require("crypto");
 
 function normalizarTelefono(valor = "") {
   return String(valor).replace(/\D/g, "");
@@ -257,6 +258,85 @@ async function crearLogTelegram({
   });
 }
 
+function hashPayload(payload = "") {
+  return crypto.createHash("sha256").update(String(payload || "")).digest("hex");
+}
+
+async function registrarMensajeProcesado({ canal, messageId, usuarioOrigen = "", payload = "" }) {
+  if (!canal || !messageId) return { procesado: false, duplicado: false };
+
+  try {
+    await supabaseRequest("/rest/v1/mensajes_procesados", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: {
+        canal,
+        message_id: String(messageId),
+        usuario_origen: String(usuarioOrigen || ""),
+        payload_hash: hashPayload(payload)
+      }
+    });
+
+    return { procesado: true, duplicado: false };
+  } catch (error) {
+    if (/duplicate key|23505|409/i.test(error.message)) {
+      return { procesado: false, duplicado: true };
+    }
+
+    throw error;
+  }
+}
+
+async function limpiarLocksExpirados() {
+  await supabaseRequest(`/rest/v1/locks_operacion?expira_at=lt.${new Date().toISOString()}`, {
+    method: "DELETE",
+    prefer: "return=minimal"
+  });
+}
+
+async function adquirirLockOperacion({
+  tipoLock,
+  clave,
+  owner = "",
+  ttlSegundos = 30 * 60
+}) {
+  if (!tipoLock || !clave) {
+    throw new Error("Faltan tipoLock o clave para adquirir lock");
+  }
+
+  await limpiarLocksExpirados().catch(() => {});
+
+  try {
+    const inserted = await supabaseRequest("/rest/v1/locks_operacion", {
+      method: "POST",
+      prefer: "return=representation",
+      body: {
+        tipo_lock: tipoLock,
+        clave,
+        owner,
+        expira_at: new Date(Date.now() + Number(ttlSegundos || 0) * 1000).toISOString()
+      }
+    });
+
+    return { adquirido: true, lock: inserted?.[0] || null };
+  } catch (error) {
+    if (/duplicate key|23505|409/i.test(error.message)) {
+      return { adquirido: false, lock: null };
+    }
+
+    throw error;
+  }
+}
+
+async function liberarLockOperacion({ tipoLock, clave }) {
+  if (!tipoLock || !clave) return;
+
+  await supabaseRequest(`/rest/v1/locks_operacion?tipo_lock=eq.${tipoLock}&clave=eq.${clave}`, {
+    method: "DELETE",
+    prefer: "return=minimal"
+  });
+}
+
 async function obtenerSesionWhatsApp(telefono) {
   const telefonoNormalizado = normalizarTelefono(telefono);
   const row = await maybeSingle("/rest/v1/sesiones_chat", {
@@ -501,6 +581,9 @@ module.exports = {
   actualizarUltimaInteraccionWhatsApp,
   crearLogWhatsApp,
   crearLogTelegram,
+  registrarMensajeProcesado,
+  adquirirLockOperacion,
+  liberarLockOperacion,
   obtenerSesionWhatsApp,
   guardarSesionWhatsApp,
   cerrarSesionWhatsApp,
