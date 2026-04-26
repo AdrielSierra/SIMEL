@@ -873,7 +873,8 @@ async function handleTelegramWebhook(req, res) {
     const chatId = String(message.chat?.id || "");
     const messageId = String(message.message_id || "");
     const fromName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ").trim();
-    const incomingText = normalizeTelegramText(message.text || "");
+    const rawText = String(message.text || "").trim();
+    const incomingText = normalizeTelegramText(rawText);
     const payloadCrudo = JSON.stringify(update);
 
     if (!chatId) {
@@ -894,7 +895,7 @@ async function handleTelegramWebhook(req, res) {
       }
     }
 
-    if (/^\/?(id|whoami)$/i.test((message.text || "").trim())) {
+    if (/^\/?(id|whoami)$/i.test(rawText)) {
       await sendTelegramMessage(chatId, `Tu telegram_chat_id es: ${chatId}`, {
         reply_markup: buildMainKeyboard(null)
       });
@@ -934,9 +935,9 @@ async function handleTelegramWebhook(req, res) {
     if (
       sesionTelegram &&
       sesionTelegram.estadoSesion === "Aprobacion interactiva telegram" &&
-      !/^\/?(menu|start|help|id|whoami)$/i.test((message.text || "").trim())
+      !/^\/?(menu|start|help|id|whoami)$/i.test(rawText)
     ) {
-      comando = { codigo: "APROBACION_INTERACTIVA_TELEGRAM", texto: incomingText };
+      comando = { codigo: "APROBACION_INTERACTIVA_TELEGRAM", texto: rawText };
     } else if (incomingText === "ayuda consultar empresa") {
       comando = { codigo: "BUSCAR_EMPRESA_AYUDA" };
     } else if (incomingText === "ayuda aprobar empresa") {
