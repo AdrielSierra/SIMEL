@@ -215,8 +215,9 @@ function normalizeTelegramText(text = "") {
 
 function buildMainKeyboard(contacto) {
   const keyboard = [
-    [{ text: "0. Perfil" }, { text: "1. Consultar manifiestos empresa" }],
-    [{ text: "2. Aprobar manifiesto empresa" }]
+    [{ text: "0. Mi perfil" }],
+    [{ text: "1. Consultar empresa" }],
+    [{ text: "2. Aprobar manifiesto" }]
   ];
 
   if (contacto?.puedeEjecutarBatch) {
@@ -235,7 +236,7 @@ function buildSuggestionsKeyboard(coincidencias = [], contacto) {
     .slice(0, 4)
     .map((item) => [{ text: `/empresa ${item.empresa}` }]);
 
-  rows.push([{ text: "0. Perfil" }]);
+  rows.push([{ text: "0. Mi perfil" }]);
 
   return {
     keyboard: rows.length ? rows : buildMainKeyboard(contacto).keyboard,
@@ -247,7 +248,8 @@ function buildSuggestionsKeyboard(coincidencias = [], contacto) {
 function buildApprovalKeyboard() {
   return {
     keyboard: [
-      [{ text: "1. Aprobar" }, { text: "2. Cancelar" }, { text: "3. Rechazar" }]
+      [{ text: "1. Aprobar" }, { text: "2. Cancelar" }, { text: "3. Rechazar" }],
+      [{ text: "0. Volver al menu" }]
     ],
     resize_keyboard: true,
     persistent_keyboard: true
@@ -527,6 +529,116 @@ async function ejecutarBatchTelegram({ chatId, contacto, fromName, triggerText }
 }
 
 async function buildTelegramResponse({ contacto, comando }) {
+  if (comando.codigo === "MENU") {
+    const lineas = [
+      "✨ Simelito",
+      "",
+      "Hola. Estoy listo para ayudarte con SIMEL.",
+      "",
+      "Puedes elegir una opcion del teclado o responder con un numero.",
+      "",
+      "--------------------",
+      "TU ESPACIO",
+      "0. Mi perfil",
+      "",
+      "--------------------",
+      "MANIFIESTOS",
+      "1. Consultar empresa",
+      "2. Aprobar manifiesto"
+    ];
+
+    if (contacto?.puedeEjecutarBatch) {
+      lineas.push("", "--------------------", "ADMIN", "3. Ejecutar batch");
+    }
+
+    lineas.push("", "--------------------", "ATAJOS", "/empresa COLON", "aprobar empresa COLON", "/menu");
+
+    return {
+      text: lineas.join("\n"),
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "BUSCAR_EMPRESA_AYUDA") {
+    return {
+      text:
+        "🏢 Consultar empresa\n\n" +
+        "Escribe el nombre exacto o una parte del nombre.\n\n" +
+        "Ejemplos:\n" +
+        "/empresa COLON\n" +
+        "/empresa TERGEN\n\n" +
+        "Si escribes una parte del nombre, te voy a sugerir coincidencias.\n\n" +
+        "Para volver al menu principal: /menu",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "APROBAR_EMPRESA_AYUDA") {
+    return {
+      text:
+        "✅ Aprobar manifiesto\n\n" +
+        "Escribe la empresa que quieres revisar y operar.\n\n" +
+        "Ejemplos:\n" +
+        "aprobar empresa COLON\n" +
+        "aprobar empresa TERGEN\n\n" +
+        "Si escribes solo una parte del nombre, te ayudare a encontrarla.\n\n" +
+        "Luego Simelito te mostrara el manifiesto y las opciones 1, 2 o 3.\n\n" +
+        "Para volver al menu principal: /menu",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "MANIFIESTOS_PENDIENTES") {
+    if (!contacto.puedeVerManifiestosPendientes) {
+      return {
+        text: "No tienes permiso para ver manifiestos pendientes.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    const empresas = await listarEmpresasSimel({ soloActivas: true });
+    const resumen = [];
+
+    for (const empresa of empresas) {
+      const datos = await obtenerDatosEmpresaSimel(empresa);
+      const total = Number(datos?.cantidadFilasPendientes || 0);
+      if (total > 0) {
+        resumen.push(`${empresa}: ${total}`);
+      }
+    }
+
+    if (!resumen.length) {
+      return {
+        text:
+          "🎉 No hay empresas con manifiestos pendientes ahora.\n\n" +
+          "Si quieres, consulta una empresa puntual con /empresa NOMBRE.",
+        replyMarkup: buildMainKeyboard(contacto)
+      };
+    }
+
+    return {
+      text:
+        `🔎 Empresas con pendientes (${resumen.length})\n\n${resumen.join("\n")}\n\n` +
+        "Para ver el detalle de una empresa, escribe /empresa NOMBRE.\n" +
+        "Para volver al menu: 0",
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
+  if (comando.codigo === "MI_PERFIL") {
+    return {
+      text:
+        "👤 Mi perfil\n\n" +
+        `Nombre: ${contacto.nombre}\n` +
+        `Rol: ${contacto.rol}\n\n` +
+        "PERMISOS\n" +
+        `Menu: ${contacto.puedeVerMenu ? "si" : "no"}\n` +
+        `Consultar empresas: ${contacto.puedeVerManifiestosPendientes ? "si" : "no"}\n` +
+        `Aprobar manifiestos: ${contacto.puedeAprobarManifiestos ? "si" : "no"}`,
+      replyMarkup: buildMainKeyboard(contacto)
+    };
+  }
+
   if (comando.codigo === "MENU") {
     const lineas = [
       "✨ Simelito",
